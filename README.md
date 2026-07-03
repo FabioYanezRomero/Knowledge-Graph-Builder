@@ -144,12 +144,13 @@ kgb run-pipeline --input data.jsonl --domain legal --client ollama \
 | `kgb list domains` | List available knowledge domains |
 | `kgb list clients` | List registered LLM clients |
 | `kgb list pipelines` | List built-in YAML pipeline configs |
+| `kgb domain lint <name\|path>` | Validate a domain's prompts, examples, and schema |
 
 Common options (most commands):
 
 | Option | Description |
 |--------|-------------|
-| `--input, -i` | Input file (JSONL, JSON, or CSV) |
+| `--input, -i` | Input file (JSONL, JSON, CSV, TXT) or a directory of `.txt` files |
 | `--output-dir, -o` | Output directory |
 | `--domain, -d` | Knowledge domain (`default`, `legal`) |
 | `--client, -c` | LLM backend (`gemini`, `ollama`, `lmstudio`) |

@@ -4,14 +4,17 @@ Supports multiple input formats:
 - JSONL (recommended): One JSON object per line
 - JSON: Array of objects
 - CSV: Comma-separated values
+- TXT: A plain-text file (one record), or a directory of .txt files
+  (one record per file, id = filename stem)
 
-All formats should have at least 'id' and 'text' fields.
+Structured formats should have at least 'id' and 'text' fields.
 """
 
 from __future__ import annotations
 
 import csv
 import json
+import sys
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -25,14 +28,18 @@ class DataLoadError(Exception):
 
 
 def detect_format(path: Path) -> str:
-    """Detect file format from extension.
+    """Detect file format from extension. A directory is treated as a
+    collection of plain-text files.
 
     Returns:
-        One of: 'jsonl', 'json', 'csv'
+        One of: 'jsonl', 'json', 'csv', 'txt'
 
     Raises:
         DataLoadError: If format cannot be determined
     """
+    if path.is_dir():
+        return 'txt'
+
     suffix = path.suffix.lower()
     if suffix == '.jsonl':
         return 'jsonl'
@@ -40,9 +47,11 @@ def detect_format(path: Path) -> str:
         return 'json'
     elif suffix == '.csv':
         return 'csv'
+    elif suffix == '.txt':
+        return 'txt'
     else:
         raise DataLoadError(
-            f"Unknown file format: {suffix}. Supported: .jsonl, .json, .csv",
+            f"Unknown file format: {suffix}. Supported: .jsonl, .json, .csv, .txt (or a directory of .txt files)",
             path
         )
 
@@ -80,6 +89,8 @@ def load_records(
         records = _load_jsonl(path)
     elif format_type == 'json':
         records = _load_json(path)
+    elif format_type == 'txt':
+        records = _load_txt(path)
     else:  # csv
         records = _load_csv(path)
 
@@ -147,6 +158,37 @@ def _load_json(path: Path) -> list[dict[str, Any]]:
         raise DataLoadError("JSON file must contain an array of objects", path)
 
     return data
+
+
+def _load_txt(path: Path) -> list[dict[str, Any]]:
+    """Load a plain-text file as one record, or a directory of .txt files
+    as one record per file (id = filename stem, sorted by name)."""
+
+    def read_one(file_path: Path) -> dict[str, Any]:
+        try:
+            text = file_path.read_text(encoding='utf-8-sig').strip()
+        except UnicodeDecodeError:
+            text = file_path.read_text(encoding='latin-1').strip()
+        return {
+            "id": file_path.stem,
+            "text": text,
+            "source_file": str(file_path),
+        }
+
+    if path.is_dir():
+        txt_files = sorted(path.glob("*.txt"))
+        if not txt_files:
+            raise DataLoadError("No .txt files found in directory", path)
+        records = [read_one(f) for f in txt_files]
+        empty = [r["source_file"] for r in records if not r["text"]]
+        if empty:
+            print(f"Warning: skipping {len(empty)} empty .txt file(s): {', '.join(empty[:5])}", file=sys.stderr)
+        return [r for r in records if r["text"]]
+
+    record = read_one(path)
+    if not record["text"]:
+        raise DataLoadError("TXT file is empty", path)
+    return [record]
 
 
 def _load_csv(path: Path) -> list[dict[str, Any]]:

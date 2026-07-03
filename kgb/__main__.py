@@ -78,6 +78,12 @@ list_app = typer.Typer(
 )
 app.add_typer(list_app, name="list")
 
+domain_app = typer.Typer(
+    help="Domain utilities.",
+    no_args_is_help=True
+)
+app.add_typer(domain_app, name="domain")
+
 console = Console()
 
 def _available_client_types() -> list[str]:
@@ -166,13 +172,35 @@ def list_pipelines():
 
 
 # =============================================================================
+# DOMAIN Commands
+# =============================================================================
+
+@domain_app.command("lint")
+def domain_lint(
+    name: str = typer.Argument(..., help="Domain name (see 'kgb list domains') or path to a domain directory"),
+):
+    """Validate a domain's prompts, examples, and schema before using it."""
+    from .domains.lint import lint_domain
+
+    errors, warnings = lint_domain(name)
+    for w in warnings:
+        console.print(f"[yellow]warning[/yellow] {w}")
+    for e in errors:
+        console.print(f"[red]error[/red] {e}")
+    if errors:
+        console.print(f"\n[red]✗ {len(errors)} error(s), {len(warnings)} warning(s)[/red]")
+        raise typer.Exit(1)
+    console.print(f"\n[green]✓ Domain '{name}' is valid[/green] ({len(warnings)} warning(s))")
+
+
+# =============================================================================
 # PIPELINE Command
 # =============================================================================
 
 @app.command("run-pipeline")
 def run_pipeline(
     config_file: Optional[Path] = typer.Option(None, "--config", "-f", help="Path to a YAML pipeline config file", exists=True),
-    input_file: Optional[Path] = typer.Option(None, "--input", "-i", "--input-file", help="Path to input file (.jsonl, .json, or .csv)", exists=True),
+    input_file: Optional[Path] = typer.Option(None, "--input", "-i", "--input-file", help="Path to input file (.jsonl, .json, .csv, .txt) or a directory of .txt files", exists=True),
     output_dir: Optional[Path] = typer.Option(None, "--output-dir", "-o", help="Directory to save pipeline artifacts"),
     domain: Optional[str] = typer.Option(None, "--domain", "-d", help="Knowledge domain"),
     mode: Optional[ExtractionMode] = typer.Option(None, "--mode", "-m", help="Extraction mode"),
@@ -360,7 +388,7 @@ def run_pipeline(
 
 @app.command()
 def extract(
-    input_file: Path = typer.Option(..., "--input", "-i", "--input-file", help="Path to input file (.jsonl, .json, or .csv)", exists=True),
+    input_file: Path = typer.Option(..., "--input", "-i", "--input-file", help="Path to input file (.jsonl, .json, .csv, .txt) or a directory of .txt files", exists=True),
     output_dir: Path = typer.Option("outputs/kg_extraction", "--output-dir", "-o", help="Directory to save outputs"),
     domain: str = typer.Option(..., "--domain", "-d", help="Knowledge domain [required] (use 'list domains' to see all)"),
     mode: ExtractionMode = typer.Option(ExtractionMode.OPEN, "--mode", "-m", help="Extraction mode"),
