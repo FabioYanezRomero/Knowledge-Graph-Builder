@@ -323,11 +323,11 @@ bridges = client.augment(text="...", prompt_description="...", format_type=Tripl
 
 ### Domain System
 
-Domains bundle prompts, examples, and schema constraints per knowledge area:
+A domain is just a **directory of resources** — no Python code required. Any
+directory with this layout is a valid domain:
 
 ```
-kgb/domains/legal/
-├── __init__.py                  # @domain("legal") class LegalDomain
+my_usecase/
 ├── extraction/
 │   ├── prompt_open.md           # Open extraction prompt
 │   ├── prompt_constrained.md    # Constrained extraction prompt
@@ -339,10 +339,26 @@ kgb/domains/legal/
 └── schema.json                  # Entity/relation type constraints
 ```
 
+Domains are resolved in this order:
+
+1. Classes registered via `@domain("name")` (only needed for custom Python behavior)
+2. Directories shipped with the package (`kgb/domains/<name>/`)
+3. Directories under any root listed in the `KGB_DOMAINS_PATH` environment variable — keep your use-case domains in your own project, no fork or PR needed
+4. A direct path: `--domain ./my_domains/finance`
+
+```bash
+# Use your own domains without touching this repo
+export KGB_DOMAINS_PATH=~/my-kg-domains
+kgb extract --input data.jsonl --domain finance --client ollama
+
+# Or point at a domain directory directly
+kgb extract --input data.jsonl --domain ./domains/finance --client ollama
+```
+
 ```python
 from kgb.domains import get_domain, list_available_domains
 
-print(list_available_domains())  # ['default', 'legal']
+print(list_available_domains())  # ['default', 'legal', ...]
 
 domain = get_domain("legal", extraction_mode="open")
 prompt = domain.extraction.prompt
@@ -398,7 +414,7 @@ export GOOGLE_API_KEY="your-key"
 The main extension points are in the codebase itself:
 
 - Add providers under `kgb/clients/providers/` with defaults in `kgb/clients/configs/`
-- Add domains under `kgb/domains/<name>/`
+- Add domains as plain directories — in your own project via `KGB_DOMAINS_PATH` or `--domain <path>` (preferred), or under `kgb/domains/<name>/` for domains shipped with the package
 - Add augmentation strategies in `kgb/builder/augmentation.py`
 - Add readers under `kgb/io/readers/`
 - Add writers under `kgb/io/writers/`

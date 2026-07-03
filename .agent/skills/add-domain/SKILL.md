@@ -5,13 +5,14 @@ description: Manage knowledge domains (e.g., Medical, Finance). Covers adding ne
 
 # Adding a Knowledge Domain
 
-This skill documents how to add a new knowledge domain to `kgb/domains/`.
+This skill documents how to add a new knowledge domain. A domain is a **directory of resources — no Python code required**.
 
 ## Overview
 
 Domains are bundled resource sets containing prompts and few-shot examples for extraction and augmentation. The system provides:
-- Registry pattern with `@domain()` decorator
-- Automatic resource discovery via `inspect.getfile()`
+- Filesystem discovery: any directory with an `extraction/` subfolder is a domain
+- External domains via `KGB_DOMAINS_PATH` or a direct path to `--domain` (preferred for use-case-specific domains — no fork/PR needed)
+- Optional `@domain()` decorator registry, only for domains that need custom Python behavior
 - Strategy-based augmentation folders
 - Optional schema constraints (entity types + relation types)
 
@@ -34,15 +35,17 @@ Domains are bundled resource sets containing prompts and few-shot examples for e
     │  └─ DomainExamples                                        │
     │                                                           │
     │  legal/                     default/                      │
-    │  ├─ __init__.py             ├─ __init__.py                │
     │  ├─ extraction/             ├─ extraction/                │
     │  ├─ augmentation/           └─ augmentation/              │
     │  └─ schema.json                                           │
     │                                                           │
     └───────────────────────────────────────────────────────────┘
 
-Registration Flow:
-  @domain("name") → register_domain() → _DOMAIN_REGISTRY → get_domain()
+Resolution order in get_domain(name):
+  1. _DOMAIN_REGISTRY (classes registered via @domain — optional)
+  2. kgb/domains/<name>/            (packaged domains)
+  3. <root>/<name>/ for each root in KGB_DOMAINS_PATH
+  4. <name> as a direct path to a domain directory
 ```
 
 ## Dependencies
@@ -55,9 +58,10 @@ Registration Flow:
 
 ## Directory Structure
 
+The directory can live **anywhere** — inside `kgb/domains/` (for domains shipped with the package) or in your own project (resolved via `KGB_DOMAINS_PATH` or a direct path):
+
 ```text
-kgb/domains/<domain_name>/
-├── __init__.py                 # Domain class with @domain decorator
+<domain_name>/
 ├── extraction/
 │   ├── prompt_open.md          # Open extraction prompt
 │   ├── prompt_constrained.md   # Type-constrained extraction prompt
@@ -202,69 +206,28 @@ When present, schema constraints are:
 - Used for validation warnings (not hard enforcement by default)
 - Accessible via `domain.schema.entity_types` and `domain.schema.relation_types`
 
-## Step 3: Implement the Domain Class
+## Step 3: Make the Domain Discoverable
 
-Create `kgb/domains/biomedical/__init__.py`:
+**No code needed.** Pick one:
 
-```python
-"""Biomedical knowledge domain for clinical and research document analysis."""
+1. **External domain (preferred for use-case-specific domains):** keep the directory in your own project and either pass its path directly (`--domain ./my_domains/biomedical`) or add its parent to `KGB_DOMAINS_PATH`:
 
-from __future__ import annotations
-from ..base import KnowledgeDomain
-from ..registry import domain
+   ```bash
+   export KGB_DOMAINS_PATH=~/my-kg-domains   # contains biomedical/
+   kgb extract --input data.jsonl --domain biomedical
+   ```
 
+2. **Packaged domain:** place the directory at `kgb/domains/biomedical/`. It is discovered automatically — no `__init__.py`, no registry import. If you add a packaged domain, also confirm its data files match the `"kgb.domains"` globs in `[tool.setuptools.package-data]` (pyproject.toml).
 
-@domain("biomedical")  # This name is used with --domain CLI flag
-class BiomedicalDomain(KnowledgeDomain):
-    """Domain for biomedical and clinical document analysis.
+3. **Custom behavior only:** if the domain needs Python logic (overriding resource loading, etc.), subclass `KnowledgeDomain` and register with `@domain("biomedical")`. The base class resolves resources relative to the file defining the subclass (`inspect.getfile`); override with `root_dir=` for testing.
 
-    Focuses on:
-    - Biomedical entities (drugs, diseases, symptoms, genes)
-    - Clinical relationships (treats, causes, indicates, inhibits)
-    """
-    pass
+## Step 4: Verify
 
-
-__all__ = ["BiomedicalDomain"]
-```
-
-### How Auto-Discovery Works
-
-The `KnowledgeDomain` base class uses `inspect.getfile()` to find resources:
-
-```python
-# In KnowledgeDomain.__init__():
-self._root_dir = Path(inspect.getfile(self.__class__)).parent
-# → resolves to kgb/domains/biomedical/
-```
-
-From there it finds:
-- `extraction/prompt_open.md` (or `prompt_constrained.md`)
-- `extraction/examples.json`
-- `augmentation/<strategy>/prompt.md`
-- `augmentation/<strategy>/examples.json`
-- `schema.json`
-
-Override with `root_dir=` for testing.
-
-## Step 4: Register in Domain Hub
-
-Update `kgb/domains/__init__.py`:
-
-```python
-# Import domains to trigger registration
-from . import legal
-from . import default
-from . import biomedical  # Add this — triggers @domain decorator
-```
-
-## Step 5: Verify
-
-### Check Registration
+### Check Discovery
 
 ```bash
 python -c "from kgb.domains import list_available_domains; print(list_available_domains())"
-# Output: ['legal', 'default', 'biomedical']
+# Output: ['biomedical', 'default', 'legal']  (with KGB_DOMAINS_PATH set, if external)
 ```
 
 ### Unit Tests
@@ -342,8 +305,8 @@ kgb list domains
 - Augmentation prompts must be `prompt.md` inside strategy folders
 
 ### "ValueError: Unknown domain 'biomedical'"
-- Add import in `kgb/domains/__init__.py`: `from . import biomedical`
-- Restart Python interpreter (imports are cached)
+- Verify the directory contains an `extraction/` subfolder (that's what marks it as a domain)
+- If external: check `KGB_DOMAINS_PATH` points to the **parent** directory, or pass the full path to `--domain`
 
 ### "ValidationError: examples[0]..."
 - Check `examples.json` matches the ExtractionExample schema
@@ -364,27 +327,27 @@ except ValueError as e:
     print(f"Domain not found: {e}")
 ```
 
-## Files to Create/Modify
+## Files to Create
+
+All under `<domain_dir>/` (your project or `kgb/domains/biomedical/`):
 
 | File | Action |
 |------|--------|
-| `kgb/domains/biomedical/__init__.py` | Create — domain class |
-| `kgb/domains/biomedical/extraction/prompt_open.md` | Create — open extraction prompt |
-| `kgb/domains/biomedical/extraction/prompt_constrained.md` | Create — constrained prompt |
-| `kgb/domains/biomedical/extraction/examples.json` | Create — few-shot examples |
-| `kgb/domains/biomedical/augmentation/connectivity/prompt.md` | Create — augmentation prompt |
-| `kgb/domains/biomedical/augmentation/connectivity/examples.json` | Create — augmentation examples |
-| `kgb/domains/biomedical/schema.json` | Create — entity/relation types |
-| `kgb/domains/__init__.py` | Modify — add import |
+| `extraction/prompt_open.md` | Create — open extraction prompt |
+| `extraction/prompt_constrained.md` | Create — constrained prompt |
+| `extraction/examples.json` | Create — few-shot examples |
+| `augmentation/connectivity/prompt.md` | Create — augmentation prompt |
+| `augmentation/connectivity/examples.json` | Create — augmentation examples |
+| `schema.json` | Create — entity/relation types (optional) |
+
+No Python files and no registry edits needed.
 
 ## Verification Checklist
 
 - [ ] Directory structure matches layout above (`.md` extensions for prompts)
-- [ ] `@domain("name")` decorator applied to class
-- [ ] Class inherits from `KnowledgeDomain`
 - [ ] Extraction prompts do NOT include format instructions (langextract handles that)
 - [ ] `examples.json` includes `char_start`/`char_end` and `extraction_text`
 - [ ] Augmentation folder per strategy (at least `connectivity/`)
-- [ ] Import added in `kgb/domains/__init__.py`
+- [ ] Domain appears in `kgb list domains` (set `KGB_DOMAINS_PATH` first if external)
 - [ ] Optional `schema.json` with entity_types and relation_types
-- [ ] Tests pass for registration, resource loading, and schema
+- [ ] Tests pass for discovery, resource loading, and schema

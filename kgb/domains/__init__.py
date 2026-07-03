@@ -1,27 +1,19 @@
 """Unified domain module for prompts and examples.
 
-This module provides the Unified Domain Pattern for managing
-knowledge domain resources (prompts, examples, schemas).
+Domains are directories of resources (prompts, examples, schema) discovered
+at runtime — no Python class needed. See registry.py for the resolution order
+(registered classes, packaged directories, KGB_DOMAINS_PATH, direct paths).
 
 Usage:
-    from kgb.domains import get_domain, domain, KnowledgeDomain
-    
-    # Get a registered domain
+    from kgb.domains import get_domain
+
     legal = get_domain("legal", extraction_mode="open")
-    
-    # Create a new domain with decorator
-    @domain("custom")
-    class CustomDomain(KnowledgeDomain):
-        pass
+    custom = get_domain("/path/to/my_usecase")
 """
 
 from .base import KnowledgeDomain, DomainComponent, DomainLike, DomainResourceError
 from .models import DomainExamples, ExtractionMode, Triple, Extraction, ExtractionExample, AugmentationExample, DomainSchema, InferenceType
 from .registry import domain, get_domain, register_domain, list_available_domains
-
-# Import domains to trigger registration
-from . import legal
-from . import default
 
 __all__ = [
     # Base classes and protocols
