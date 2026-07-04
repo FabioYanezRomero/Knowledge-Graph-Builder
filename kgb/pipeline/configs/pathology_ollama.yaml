@@ -19,8 +19,9 @@ input:
 
 output_dir: outputs/pathology_run
 
-# trace: true    # snapshot triples after each transforming stage into
-#                # output_dir/trace/<NN>_<stage>/ for per-stage traceability
+# trace: true    # checkpoint triples + per-stage decisions (metadata) after each
+#                # transforming stage into output_dir/trace/<NN>_<stage>/ so you
+#                # can see where entities are lost, merged, vetoed, or rejected
 
 steps:
   - extract

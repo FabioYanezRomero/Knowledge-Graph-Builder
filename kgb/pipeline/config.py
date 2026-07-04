@@ -232,7 +232,7 @@ def build_pipeline_from_config(
         if trace and step_name in _TRIPLE_TRANSFORMING_STEPS:
             trace_counter += 1
             snapshot_dir = output_dir / "trace" / f"{trace_counter:02d}_{step_name}"
-            steps_sequence.append(get_step("export-json")(output_dir=snapshot_dir))
+            steps_sequence.append(get_step("checkpoint")(output_dir=snapshot_dir))
 
     if not steps_sequence:
         raise ValueError("Pipeline config defines no steps")

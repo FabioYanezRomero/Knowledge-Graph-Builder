@@ -10,7 +10,7 @@ from .config import load_pipeline_config, build_pipeline_from_config, list_pipel
 
 # Explicitly load implementations to trigger their @register_step decorators.
 # These will register the steps in the registry upon importing the `pipeline` module.
-from .steps import extraction, augmentation, consolidation, export, converter, visualization
+from .steps import extraction, augmentation, consolidation, export, checkpoint, converter, visualization
 
 __all__ = [
     "PipelineContext",
