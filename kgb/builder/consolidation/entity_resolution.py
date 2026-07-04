@@ -129,15 +129,6 @@ def entity_resolution_strategy(
 
     entity_entries = [{"name": e, "edges": entity_context.get(e, [])} for e in reduced_entities]
     record: dict[str, Any] = {"entities": entity_entries}
-
-    # Fuzzy blocking: surface look-alike pairs as CANDIDATES for the LLM to
-    # judge (never merged here). Directs the LLM to morphological variants the
-    # exact-match sieve can't catch; veto-filtered so it isn't asked about
-    # numeric/staging siblings.
-    candidates = fuzzy_candidates(reduced_entities)
-    if candidates:
-        record["candidate_merges"] = [[a, b] for a, b, _ in candidates]
-
     if text:
         record["source_text_excerpt"] = text[:4000] + ("..." if len(text) > 4000 else "")
 
@@ -146,6 +137,22 @@ def entity_resolution_strategy(
         record,
         schema_guidance=build_schema_guidance(constraints),
     )
+
+    # Fuzzy blocking: surface look-alike pairs as CANDIDATES for the LLM to
+    # judge (never merged here). Appended as an explicit instruction so the LLM
+    # actually attends to them — directs it to morphological variants the
+    # exact-match sieve can't catch. Veto-filtered, so it isn't asked about
+    # numeric/staging siblings. Works for any domain without editing its prompt.
+    candidates = fuzzy_candidates(reduced_entities)
+    if candidates:
+        lines = "\n".join(f"- {a}  vs  {b}" for a, b, _ in candidates)
+        final_prompt += (
+            "\n\n## Candidate pairs to evaluate\n"
+            "These entity names are surface-similar. For each pair, decide whether "
+            "they refer to the SAME real-world entity, and if so include them in the "
+            "same merge group. If they are genuinely different, do not merge them.\n"
+            f"{lines}"
+        )
 
     print(
         f"  Entity resolution: {len(entities)} entities -> {len(reduced_entities)} after "
