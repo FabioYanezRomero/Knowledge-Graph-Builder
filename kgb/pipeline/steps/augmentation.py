@@ -70,7 +70,19 @@ class AugmentationStep:
             PipelineContext with refined graph triples.
         """
         if not context.triples:
-            context.metadata["augmentation_skipped"] = "True (no initial triples found)"
+            context.metadata[self.METADATA_PREFIX + "skipped"] = "True (no initial triples found)"
+            return context
+
+        # A strategy the domain doesn't define is a benign no-op, not a failure:
+        # skip it (keeping the record's triples and downstream steps) instead of
+        # erroring the whole record.
+        if self.strategy not in self.domain.list_augmentation_strategies():
+            print(
+                f"Warning: domain has no '{self.strategy}' strategy; skipping "
+                f"{self.__class__.__name__} for record {context.record_id}.",
+                file=sys.stderr,
+            )
+            context.metadata[self.METADATA_PREFIX + "skipped"] = f"True (domain lacks '{self.strategy}')"
             return context
 
         try:

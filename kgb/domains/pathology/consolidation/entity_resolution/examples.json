@@ -1,0 +1,52 @@
+[
+    {
+        "input": {
+            "entities": [
+                "transurethral resection of bladder tumor",
+                "TURBT",
+                "urinary bladder",
+                "bladder",
+                "urothelial carcinoma",
+                "high-grade urothelial carcinoma",
+                "muscularis propria",
+                "prostate",
+                "Gleason 3+4",
+                "Gleason 4+3"
+            ]
+        },
+        "output": [
+            {
+                "canonical": "transurethral resection of bladder tumor",
+                "variants": ["transurethral resection of bladder tumor", "TURBT"]
+            },
+            {
+                "canonical": "urinary bladder",
+                "variants": ["urinary bladder", "bladder"]
+            }
+        ]
+    },
+    {
+        "input": {
+            "entities": [
+                "prostate-specific antigen",
+                "PSA",
+                "prostate adenocarcinoma",
+                "prostatic adenocarcinoma",
+                "prostate",
+                "seminal vesicle",
+                "perineural invasion",
+                "surgical margin"
+            ]
+        },
+        "output": [
+            {
+                "canonical": "prostate-specific antigen",
+                "variants": ["prostate-specific antigen", "PSA"]
+            },
+            {
+                "canonical": "prostate adenocarcinoma",
+                "variants": ["prostate adenocarcinoma", "prostatic adenocarcinoma"]
+            }
+        ]
+    }
+]

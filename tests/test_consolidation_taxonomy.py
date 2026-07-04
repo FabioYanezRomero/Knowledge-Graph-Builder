@@ -63,3 +63,24 @@ def test_consolidate_pipeline_step(tmp_path, monkeypatch):
 def test_kind_mismatch_warns(capsys):
     AugmentationStep(client=object(), domain=get_domain("default"), strategy="entity_resolution")
     assert "consolidate" in capsys.readouterr().err
+
+
+def test_missing_strategy_skips_without_erroring(tmp_path, capsys):
+    # domain with only extraction, no augmentation/consolidation strategies
+    domain_dir = tmp_path / "bare"
+    (domain_dir / "extraction").mkdir(parents=True)
+    (domain_dir / "extraction" / "prompt_open.md").write_text("extract")
+    domain = get_domain(str(domain_dir))
+
+    from kgb.domains import Triple
+    from kgb.pipeline.context import PipelineContext
+
+    step = ConsolidationStep(client=object(), domain=domain, strategy="entity_resolution")
+    ctx = PipelineContext(record_id="r1", text="t")
+    ctx.triples = [Triple(head="a", relation="r", tail="b")]
+    out = step.process(ctx)
+
+    assert out.errors == []                      # record NOT failed
+    assert len(out.triples) == 1                 # triples preserved for downstream steps
+    assert "consolidation_skipped" in out.metadata
+    assert "no 'entity_resolution' strategy" in capsys.readouterr().err

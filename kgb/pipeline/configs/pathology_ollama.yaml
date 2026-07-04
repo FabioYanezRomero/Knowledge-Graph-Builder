@@ -1,0 +1,33 @@
+name: pathology-ollama
+description: Full pathology pipeline (extract -> consolidate -> augment -> convert -> visualize) on local Ollama gemma4:12b
+
+client:
+  type: ollama
+  model: gemma4:12b-mlx
+  temperature: 0.0
+  timeout: 600
+  base_url: http://localhost:11434
+  workers: 2
+
+domain: pathology
+mode: open
+
+input:
+  file: data/pathology/reports        # directory of .txt reports (one graph per file)
+  text_field: text
+  id_field: id
+
+output_dir: outputs/pathology_run
+
+steps:
+  - extract
+  - consolidate            # entity_resolution: merge entity name variants (adds no triples)
+  - augment:
+      max_disconnected: 1
+      max_iterations: 3
+  - export-json
+  - convert
+  - visualize-network:
+      layout: spring
+  - visualize-extraction:
+      group_by: entity_type
