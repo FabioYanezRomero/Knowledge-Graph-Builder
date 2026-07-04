@@ -1,16 +1,17 @@
 """Entity resolution: canonicalize entity names across triples.
 
-Two layers, deterministic-first:
-1. A Schwartz-Hearst pre-pass reads the source text for acronym/expansion pairs
-   and merges them when BOTH forms already exist as entities (closed-set, no
-   LLM, no cost).
-2. The LLM clusters the remaining variants (synonyms, morphological variants)
-   using edge context, and its output is filtered through the closed-set guard.
+Layered, deterministic-first, and composable with the semantic layer:
+1. A deterministic SIEVE BAG (sieves.py) runs high-precision passes over the
+   source text and entity strings, merging only existing entities (closed-set).
+2. The entity set is REDUCED to the sieve canonicals, and the LLM clusters the
+   remaining variants (synonyms, morphological) on that smaller set.
+3. Sieve and LLM merges are composed via transitive closure, then filtered by
+   the discriminative veto and the closed-set guard.
 """
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 from ...clients import BaseLLMClient
 from ...domains import KnowledgeDomain, Triple
@@ -21,7 +22,7 @@ from ..validation import (
     render_prompt_template,
 )
 from .guard import enforce_closed_set
-from .schwartz_hearst import extract_abbreviation_pairs
+from .sieves import run_sieves, resolve_chains
 from .veto import apply_discriminative_veto
 
 
@@ -36,45 +37,26 @@ def _collect_unique_entities(triples: list[Triple]) -> list[str]:
     return sorted(entities)
 
 
-def _build_entity_context(entities: list[str], triples: list[Triple]) -> dict[str, list[str]]:
-    """Build a context map: entity → list of triples it appears in.
-
-    This gives the LLM evidence about how each entity is used, so it can
-    make informed decisions about whether two entity names are the same
-    real-world thing (e.g., "Salvino" appearing as head of "served_as → CEO"
-    confirms it's the same as "Michael J. Salvino").
-    """
+def _build_entity_context(
+    entities: list[str],
+    triples: list[Triple],
+    resolve: Callable[[str], str] = lambda e: e,
+) -> dict[str, list[str]]:
+    """Build a context map: entity → triples it appears in, endpoints resolved
+    through `resolve` so edges reference the (post-sieve) canonical names the LLM
+    is being asked about."""
     context: dict[str, list[str]] = {e: [] for e in entities}
     for t in triples:
-        triple_str = f"({t.head}) --[{t.relation}]--> ({t.tail})"
-        h = t.head.strip() if t.head else ""
-        tl = t.tail.strip() if t.tail else ""
+        h = resolve(t.head.strip()) if t.head else ""
+        tl = resolve(t.tail.strip()) if t.tail else ""
+        triple_str = f"({h}) --[{t.relation}]--> ({tl})"
         if h in context:
             context[h].append(triple_str)
         if tl in context and tl != h:
             context[tl].append(triple_str)
-    # Cap per entity to keep prompt manageable
     for e in context:
         context[e] = context[e][:8]
     return context
-
-
-def acronym_mapping(text: str, entities: list[str]) -> dict[str, str]:
-    """Deterministic acronym → expansion merges via Schwartz-Hearst.
-
-    Extracts (short, long) pairs from the text, then keeps only those where
-    BOTH forms match an existing entity (case-insensitive). Returns a
-    short_entity -> long_entity mapping (the expansion is canonical). Never
-    introduces an entity absent from the graph.
-    """
-    by_norm = {e.lower(): e for e in entities}
-    mapping: dict[str, str] = {}
-    for short, long in extract_abbreviation_pairs(text):
-        short_e = by_norm.get(short.lower())
-        long_e = by_norm.get(long.lower())
-        if short_e and long_e and short_e != long_e:
-            mapping[short_e] = long_e
-    return mapping
 
 
 def _apply_entity_mapping(
@@ -116,10 +98,8 @@ def entity_resolution_strategy(
     augmentation_prompt_override: str | None = None,
     **kwargs: Any,
 ) -> tuple[list[Triple], dict[str, Any]]:
-    """Entity resolution: merge entity name variants into canonical names.
-
-    Does NOT generate new triples — it only merges existing entities and removes
-    resulting duplicates, and never introduces an entity absent from the graph.
+    """Merge entity name variants into canonical names (deterministic sieves +
+    LLM), never introducing an entity absent from the graph.
 
     Returns:
         Tuple of (resolved_triples, metadata)
@@ -130,18 +110,23 @@ def entity_resolution_strategy(
 
     entity_set = set(entities)
 
-    # 1. Deterministic pre-pass: Schwartz-Hearst acronym/expansion merges,
-    #    already closed to existing entities.
-    mapping = acronym_mapping(text, entities)
-    acronym_merges = len(mapping)
+    # 1. Deterministic sieve bag (closed-set), then resolve chains to get the
+    #    canonical each entity currently maps to.
+    sieve_mapping = run_sieves(text, entities)
+    sieve_resolved = resolve_chains(sieve_mapping)
+    resolve = lambda e: sieve_resolved.get(e, e)
+    sieve_merges = len(sieve_resolved)
 
-    # 2. LLM pass: cluster the remaining variants using edge context.
-    entity_context = _build_entity_context(entities, triples)
+    # 2. Reduce the entity set to the sieve canonicals — the LLM works on the
+    #    already-consolidated set, and its merges compose with the sieves'.
+    reduced_entities = sorted({resolve(e) for e in entities})
+    entity_context = _build_entity_context(reduced_entities, triples, resolve)
+
     er_component = domain.get_augmentation("entity_resolution")
     prompt_template = augmentation_prompt_override or er_component.prompt
     constraints = collect_schema_constraints(domain, er_component.examples)
 
-    entity_entries = [{"name": e, "edges": entity_context.get(e, [])} for e in entities]
+    entity_entries = [{"name": e, "edges": entity_context.get(e, [])} for e in reduced_entities]
     record: dict[str, Any] = {"entities": entity_entries}
     if text:
         record["source_text_excerpt"] = text[:4000] + ("..." if len(text) > 4000 else "")
@@ -152,7 +137,11 @@ def entity_resolution_strategy(
         schema_guidance=build_schema_guidance(constraints),
     )
 
-    print(f"  Entity resolution: {len(entities)} entities ({acronym_merges} acronym merges), asking LLM to cluster...", flush=True)
+    print(
+        f"  Entity resolution: {len(entities)} entities -> {len(reduced_entities)} after "
+        f"{sieve_merges} sieve merge(s); asking LLM to cluster the rest...",
+        flush=True,
+    )
 
     raw_results = client.augment(
         text=final_prompt,
@@ -162,6 +151,8 @@ def entity_resolution_strategy(
         max_tokens=max_tokens,
     )
 
+    # 3. Combine: sieves first (higher precision wins), then LLM additions.
+    mapping = dict(sieve_mapping)
     for group in raw_results or []:
         if not isinstance(group, dict) or "canonical" not in group:
             continue
@@ -171,10 +162,12 @@ def entity_resolution_strategy(
             for v in variants:
                 v_str = str(v).strip()
                 if v_str and v_str != canonical:
-                    mapping[v_str] = canonical
+                    mapping.setdefault(v_str, canonical)
 
-    # 3. Discriminative veto: block surface-similar-but-distinct merges
-    #    (numeric/staging siblings) over the combined mapping.
+    # 4. Transitive closure so sieve and LLM merges chain (A->B->C => A->C).
+    mapping = resolve_chains(mapping)
+
+    # 5. Discriminative veto, then closed-set guard.
     mapping, vetoed_mappings = apply_discriminative_veto(mapping)
     if vetoed_mappings:
         print(
@@ -182,8 +175,6 @@ def entity_resolution_strategy(
             f"in a discriminative token (numeric/staging)",
             flush=True,
         )
-
-    # 4. Closed-set guard over the combined mapping.
     mapping, rejected_mappings = enforce_closed_set(mapping, entity_set)
     if rejected_mappings:
         print(
@@ -198,7 +189,7 @@ def entity_resolution_strategy(
             "strategy": "entity_resolution",
             "status": "no_merges",
             "entities_analyzed": len(entities),
-            "acronym_merges": acronym_merges,
+            "sieve_merges": sieve_merges,
             "vetoed_mappings": vetoed_mappings,
             "rejected_mappings": rejected_mappings,
         }
@@ -218,7 +209,7 @@ def entity_resolution_strategy(
         "strategy": "entity_resolution",
         "status": "success",
         "entities_analyzed": len(entities),
-        "acronym_merges": acronym_merges,
+        "sieve_merges": sieve_merges,
         "merge_groups": canonical_targets,
         "variants_mapped": merged_entities,
         "triples_before": triples_before,
@@ -232,4 +223,4 @@ def entity_resolution_strategy(
     return resolved_triples, metadata
 
 
-__all__ = ["entity_resolution_strategy", "acronym_mapping"]
+__all__ = ["entity_resolution_strategy"]
