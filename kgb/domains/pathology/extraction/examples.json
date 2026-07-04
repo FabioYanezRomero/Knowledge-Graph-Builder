@@ -1,0 +1,43 @@
+[
+  {
+    "text": "Moderately differentiated adenocarcinoma of the sigmoid colon with CK20 positive tumor cells.",
+    "extractions": [
+      {
+        "extraction_class": "Triple",
+        "extraction_text": "adenocarcinoma of the sigmoid colon",
+        "char_start": 26,
+        "char_end": 61,
+        "attributes": {
+          "head": "adenocarcinoma",
+          "relation": "located_in",
+          "tail": "sigmoid colon",
+          "inference": "explicit"
+        }
+      },
+      {
+        "extraction_class": "Triple",
+        "extraction_text": "Moderately differentiated adenocarcinoma",
+        "char_start": 0,
+        "char_end": 40,
+        "attributes": {
+          "head": "adenocarcinoma",
+          "relation": "has_grade",
+          "tail": "moderately differentiated",
+          "inference": "explicit"
+        }
+      },
+      {
+        "extraction_class": "Triple",
+        "extraction_text": "CK20 positive",
+        "char_start": 67,
+        "char_end": 80,
+        "attributes": {
+          "head": "CK20",
+          "relation": "has_status",
+          "tail": "positive",
+          "inference": "explicit"
+        }
+      }
+    ]
+  }
+]

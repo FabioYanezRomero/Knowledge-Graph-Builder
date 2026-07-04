@@ -676,21 +676,29 @@ def consolidate_default(ctx: typer.Context):
 def convert(
     input_dir: Path = typer.Option(..., "--input", "-i", help="Directory with JSON triples", exists=True),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory for GraphML"),
+    merge: bool = typer.Option(False, "--merge", help="Merge all JSON files into a single cross-document GraphML"),
 ):
     """Convert JSON triples to GraphML format.
-    
+
     \b
     Examples:
         kgb convert --input outputs/extracted_json
+        kgb convert --input outputs/extracted_json --merge
     """
     console.print(f"[bold blue]Converting JSON to GraphML[/bold blue]")
-    
+
     graphml_dir = output_dir or input_dir.parent / "graphml"
-    
+
     try:
-        graphml_files = convert_json_directory(input_dir, graphml_dir)
-        console.print(f"\n[bold green]✓ Converted {len(graphml_files)} files[/bold green]")
-        console.print(f"Output: {graphml_dir}")
+        if merge:
+            from .io.writers import merge_json_directories
+            output_path = graphml_dir / "merged_graph.graphml"
+            merge_json_directories(input_dir, output_path)
+            console.print(f"\n[bold green]✓ Merged graph: {output_path}[/bold green]")
+        else:
+            graphml_files = convert_json_directory(input_dir, graphml_dir)
+            console.print(f"\n[bold green]✓ Converted {len(graphml_files)} files[/bold green]")
+            console.print(f"Output: {graphml_dir}")
         console.print(f"\n[dim]Next: kgb visualize network --input {graphml_dir}[/dim]")
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")

@@ -1,0 +1,36 @@
+{
+    "entity_types": [
+        "Diagnosis",
+        "Tumor",
+        "AnatomicalSite",
+        "Specimen",
+        "Procedure",
+        "Biomarker",
+        "Gene",
+        "Protein",
+        "Grade",
+        "Stage",
+        "Finding",
+        "Margin",
+        "LymphNode",
+        "Measurement"
+    ],
+    "relation_types": [
+        "has_diagnosis",
+        "located_in",
+        "invades",
+        "metastasized_to",
+        "involved_by",
+        "has_grade",
+        "has_stage",
+        "has_size",
+        "has_status",
+        "expresses",
+        "has_margin_status",
+        "obtained_from",
+        "underwent",
+        "associated_with",
+        "confirms",
+        "shows"
+    ]
+}

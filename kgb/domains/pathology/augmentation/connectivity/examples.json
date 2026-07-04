@@ -1,0 +1,48 @@
+[
+  {
+    "input": {
+      "text": "Colon biopsy: Invasive adenocarcinoma, moderately differentiated. Immunohistochemistry shows loss of MLH1 and PMS2.",
+      "components": [
+        {
+          "entities": ["Colon biopsy", "colon"]
+        },
+        {
+          "entities": ["Invasive adenocarcinoma", "moderately differentiated"]
+        },
+        {
+          "entities": ["MLH1", "PMS2", "loss"]
+        }
+      ]
+    },
+    "output": [
+      {
+        "head": "Invasive adenocarcinoma",
+        "relation": "located_in",
+        "tail": "colon",
+        "inference": "explicit",
+        "justification": "The diagnosis is reported in a colon biopsy."
+      },
+      {
+        "head": "Colon biopsy",
+        "relation": "contains_finding",
+        "tail": "Invasive adenocarcinoma",
+        "inference": "explicit",
+        "justification": "The biopsy contains the stated carcinoma diagnosis."
+      },
+      {
+        "head": "MLH1",
+        "relation": "tested_in",
+        "tail": "Invasive adenocarcinoma",
+        "inference": "contextual",
+        "justification": "The IHC results refer to the reported carcinoma."
+      },
+      {
+        "head": "PMS2",
+        "relation": "tested_in",
+        "tail": "Invasive adenocarcinoma",
+        "inference": "contextual",
+        "justification": "The IHC results refer to the reported carcinoma."
+      }
+    ]
+  }
+]

@@ -155,7 +155,7 @@ steps:
 | `kgb extract` | Extract knowledge graph triples from text |
 | `kgb augment connectivity` | Bridge disconnected graph components |
 | `kgb consolidate entity_resolution` | Merge entity name variants (adds no triples) |
-| `kgb convert` | Convert JSON triples to GraphML |
+| `kgb convert` | Convert JSON triples to GraphML (`--merge` for one cross-document graph) |
 | `kgb visualize network` | Interactive network graph (Cytoscape.js) |
 | `kgb visualize extraction` | Entity highlights in source text (langextract) |
 | `kgb run-pipeline` | Run multi-step pipeline (YAML or flags) |
@@ -170,7 +170,7 @@ Common options (most commands):
 |--------|-------------|
 | `--input, -i` | Input file (JSONL, JSON, CSV, TXT) or a directory of `.txt` files |
 | `--output-dir, -o` | Output directory |
-| `--domain, -d` | Knowledge domain (`default`, `legal`) |
+| `--domain, -d` | Knowledge domain (`default`, `legal`, `pathology`, or a path) |
 | `--client, -c` | LLM backend (`gemini`, `ollama`, `lmstudio`) |
 | `--model` | Model identifier (uses provider default if omitted) |
 | `--mode, -m` | Extraction mode (`open`, `constrained`) |

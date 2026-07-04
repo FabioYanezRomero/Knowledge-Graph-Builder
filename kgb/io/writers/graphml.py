@@ -152,4 +152,42 @@ def convert_json_directory(
     return graphml_files
 
 
-__all__ = ["json_to_graphml", "convert_json_directory", "normalize_entity_name", "get_canonical_name"]
+def merge_json_directories(
+    input_dir: Path | str,
+    output_path: Path | str,
+) -> nx.DiGraph:
+    """Merge all JSON triple files in a directory into a single GraphML file.
+
+    Entity names are canonicalized across documents, so records mentioning
+    the same entity share a node in the merged graph.
+
+    Args:
+        input_dir: Directory containing per-record JSON triple files
+        output_path: Path of the merged GraphML file to write
+
+    Returns:
+        The merged NetworkX directed graph
+    """
+    input_dir = Path(input_dir)
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    all_triples: list[dict[str, Any]] = []
+    for json_file in sorted(input_dir.glob("*.json")):
+        with open(json_file, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                print(f"Skipping {json_file}: Invalid JSON")
+                continue
+        if not isinstance(data, list):
+            print(f"Skipping {json_file}: Not a list of triples")
+            continue
+        all_triples.extend(data)
+
+    G = json_to_graphml(all_triples, output_path)
+    print(f"Merged {len(all_triples)} triples into {output_path.name}: {G.number_of_nodes()} nodes, {G.number_of_edges()} edges")
+    return G
+
+
+__all__ = ["json_to_graphml", "convert_json_directory", "merge_json_directories", "normalize_entity_name", "get_canonical_name"]
