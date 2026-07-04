@@ -31,7 +31,7 @@ _STEP_OUTPUT_SUBDIRS: dict[str, str] = {
 }
 
 # Steps that require the shared LLM client and domain objects.
-_STEPS_NEEDING_CLIENT = {"extract", "augment"}
+_STEPS_NEEDING_CLIENT = {"extract", "augment", "consolidate"}
 
 
 def load_pipeline_config(path: str | Path) -> dict[str, Any]:

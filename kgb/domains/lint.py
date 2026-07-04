@@ -73,11 +73,14 @@ def lint_domain(name_or_path: str) -> tuple[list[str], list[str]]:
                 if extraction.extraction_text and extraction.extraction_text not in example.text:
                     warnings.append(f"{ext_examples}[{i}].extractions[{j}]: extraction_text not found verbatim in text")
 
-    # Augmentation strategies
-    aug_dir = root / "augmentation"
-    strategies = [d for d in aug_dir.iterdir() if d.is_dir()] if aug_dir.is_dir() else []
+    # Strategy folders (augmentation/ adds knowledge, consolidation/ merges it)
+    strategies = []
+    for parent in ("augmentation", "consolidation"):
+        parent_dir = root / parent
+        if parent_dir.is_dir():
+            strategies.extend(d for d in parent_dir.iterdir() if d.is_dir())
     if not strategies:
-        warnings.append(f"{aug_dir}: no augmentation strategies — 'kgb augment' will fail for this domain")
+        warnings.append(f"{root}: no augmentation/consolidation strategies — 'kgb augment' and 'kgb consolidate' will fail for this domain")
     for strategy in strategies:
         prompt = strategy / "prompt.md"
         if not prompt.is_file() or not prompt.read_text(encoding="utf-8").strip():

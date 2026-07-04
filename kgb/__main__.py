@@ -84,6 +84,12 @@ domain_app = typer.Typer(
 )
 app.add_typer(domain_app, name="domain")
 
+consolidate_app = typer.Typer(
+    help="Step 2b: Consolidate the knowledge graph (merge/clean existing triples, adds no knowledge).",
+    no_args_is_help=True
+)
+app.add_typer(consolidate_app, name="consolidate")
+
 console = Console()
 
 def _available_client_types() -> list[str]:
@@ -470,8 +476,82 @@ def extract(
 
 
 # =============================================================================
-# AUGMENT Subcommands (Step 2)
+# AUGMENT / CONSOLIDATE Subcommands (Step 2)
 # =============================================================================
+
+def _run_graph_strategy(
+    strategy: str,
+    input_file: Path,
+    output_dir: Path,
+    domain: str,
+    mode: ExtractionMode,
+    client: str,
+    model: Optional[str],
+    api_key: Optional[str],
+    base_url: Optional[str],
+    text_field: str,
+    id_field: str,
+    record_ids: Optional[list[str]],
+    limit: Optional[int],
+    temperature: float,
+    no_progress: bool,
+    max_workers: Optional[int],
+    timeout: int,
+    **strategy_kwargs,
+) -> Path:
+    """Shared runner for augment/consolidate strategies over extracted JSON."""
+    records = load_records(input_file, text_field, id_field, record_ids, limit)
+
+    from .domains import get_domain
+    domain_obj = get_domain(domain, extraction_mode=mode)
+    config = _build_client_config(client, model, api_key, base_url, temperature, no_progress, max_workers, timeout)
+    llm_client = ClientFactory.create(config)
+
+    json_dir = output_dir / "extracted_json"
+    json_dir.mkdir(parents=True, exist_ok=True)
+
+    from .builder import augment_triples
+
+    count = 0
+    for record in records:
+        record_id = str(record["id"])
+        text = str(record["text"])
+        output_path = json_dir / f"{record_id}.json"
+
+        existing_triples = None
+        if output_path.exists():
+            console.print(f"[dim]Loading existing triples for {record_id}[/dim]")
+            with open(output_path, "r", encoding="utf-8") as f:
+                existing_triples = json.load(f)
+
+        console.print(f"Processing {record_id} ({strategy})...")
+        triples, metadata = augment_triples(
+            client=llm_client,
+            domain=domain_obj,
+            text=text,
+            record_id=record_id,
+            initial_triples=existing_triples,
+            temperature=temperature,
+            augmentation_strategy=strategy,
+            **strategy_kwargs,
+        )
+
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump([t.model_dump() for t in triples], f, ensure_ascii=False, indent=2)
+
+        count += 1
+        if metadata.get("partial_result"):
+            console.print(f"  [yellow]⚠ Partial result saved due to iteration failure.[/yellow]")
+        summary = f"  → {len(triples)} triples saved"
+        if "final_components" in metadata:
+            summary += f" (Final components: {metadata['final_components']})"
+        console.print(summary)
+
+    console.print(f"\n[bold green]✓ Strategy '{strategy}' complete.[/bold green]")
+    console.print(f"Output: {json_dir} ({count} files)")
+    console.print(f"\n[dim]Next: kgb convert --input {json_dir}[/dim]")
+    return json_dir
+
 
 @augment_app.command("connectivity")
 def augment_connectivity(
@@ -508,57 +588,61 @@ def augment_connectivity(
     """
     console.print(f"[bold blue]Step 2: Augmentation (Connectivity)[/bold blue]")
     console.print(f"Target: ≤ {max_disconnected} components | Max iterations: {max_iterations}")
-    
+
     try:
-        records = load_records(input_file, text_field, id_field, record_ids, limit)
-        
-        from .domains import get_domain
-        domain_obj = get_domain(domain, extraction_mode=mode)
-        config = _build_client_config(client, model, api_key, base_url, temperature, no_progress, max_workers, timeout)
-        llm_client = ClientFactory.create(config)
-        
-        json_dir = output_dir / "extracted_json"
-        json_dir.mkdir(parents=True, exist_ok=True)
-        
-        from .builder import augment_triples
-        
-        output_files = {}
-        for record in records:
-            record_id = str(record["id"])
-            text = str(record["text"])
-            output_path = json_dir / f"{record_id}.json"
-            
-            existing_triples = None
-            if output_path.exists():
-                console.print(f"[dim]Loading existing triples for {record_id}[/dim]")
-                with open(output_path, "r", encoding="utf-8") as f:
-                    existing_triples = json.load(f)
-            
-            console.print(f"Processing {record_id} (augment connectivity)...")
-            triples, metadata = augment_triples(
-                client=llm_client,
-                domain=domain_obj,
-                text=text,
-                record_id=record_id,
-                initial_triples=existing_triples,
-                temperature=temperature,
-                max_disconnected=max_disconnected,
-                max_iterations=max_iterations,
-                augmentation_strategy="connectivity"
-            )
-            
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump([t.model_dump() for t in triples], f, ensure_ascii=False, indent=2)
-            
-            output_files[record_id] = output_path
-            if metadata.get("partial_result"):
-                console.print(f"  [yellow]⚠ Partial result saved due to iteration failure.[/yellow]")
-            console.print(f"  → {len(triples)} triples saved (Final components: {metadata['final_components']})")
-        
-        console.print(f"\n[bold green]✓ Augmentation complete.[/bold green]")
-        console.print(f"Output: {json_dir} ({len(output_files)} files)")
-        console.print(f"\n[dim]Next: kgb convert --input {json_dir}[/dim]")
-        
+        _run_graph_strategy(
+            "connectivity",
+            input_file, output_dir, domain, mode, client, model, api_key, base_url,
+            text_field, id_field, record_ids, limit, temperature, no_progress, max_workers, timeout,
+            max_disconnected=max_disconnected,
+            max_iterations=max_iterations,
+        )
+    except Exception as e:
+        console.print(f"[bold red]Error:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
+@consolidate_app.command("entity_resolution")
+def consolidate_entity_resolution(
+    input_file: Path = typer.Option(..., "--input", "-i", "--input-file", help="Path to input file", exists=True),
+    output_dir: Path = typer.Option("outputs/kg_extraction", "--output-dir", "-o", help="Directory with extracted JSON"),
+    domain: str = typer.Option(..., "--domain", "-d", help="Knowledge domain (use 'list domains' to see all)"),
+    mode: ExtractionMode = typer.Option(ExtractionMode.OPEN, "--mode", "-m", help="Extraction mode"),
+    client: str = typer.Option(
+        "gemini",
+        "--client",
+        "-c",
+        help="LLM client type",
+        callback=_validate_client_type,
+    ),
+    model: Optional[str] = typer.Option(None, "--model", help="Model ID"),
+    api_key: Optional[str] = typer.Option(None, "--api-key", help="API key"),
+    base_url: Optional[str] = typer.Option(None, "--base-url", help="Base URL"),
+    text_field: str = typer.Option("text", "--text-field", help="Field name containing text"),
+    id_field: str = typer.Option("id", "--id-field", help="Field name containing IDs"),
+    record_ids: Optional[list[str]] = typer.Option(None, "--record-ids", help="List of record IDs to process"),
+    limit: Optional[int] = typer.Option(None, "--limit", "-l", help="Limit records"),
+    temperature: float = typer.Option(0.0, "--temp", help="Sampling temperature"),
+    no_progress: bool = typer.Option(False, "--no-progress", help="Hide progress bar"),
+    max_workers: Optional[int] = typer.Option(None, "--workers", help="Max parallel workers"),
+    timeout: int = typer.Option(120, "--timeout", help="Request timeout"),
+):
+    """Entity resolution: merge entity name variants into canonical names.
+
+    Consolidation only — no new triples are generated.
+
+    \b
+    Examples:
+        kgb consolidate entity_resolution --input data.jsonl --domain legal
+    """
+    console.print(f"[bold blue]Step 2b: Consolidation (Entity Resolution)[/bold blue]")
+
+    try:
+        _run_graph_strategy(
+            "entity_resolution",
+            input_file, output_dir, domain, mode, client, model, api_key, base_url,
+            text_field, id_field, record_ids, limit, temperature, no_progress, max_workers, timeout,
+        )
     except Exception as e:
         console.print(f"[bold red]Error:[/bold red] {e}")
         raise typer.Exit(code=1)
@@ -568,8 +652,20 @@ def augment_connectivity(
 def augment_default(ctx: typer.Context):
     """Show available augmentation strategies."""
     if ctx.invoked_subcommand is None:
-        console.print("[yellow]Available strategies:[/yellow]")
-        console.print("  • connectivity - Reduce disconnected graph components")
+        from .builder.augmentation import list_strategies
+        console.print("[yellow]Augmentation strategies (add new triples):[/yellow]")
+        for s in list_strategies(kind="augment"):
+            console.print(f"  • {s}")
+
+
+@consolidate_app.callback(invoke_without_command=True)
+def consolidate_default(ctx: typer.Context):
+    """Show available consolidation strategies."""
+    if ctx.invoked_subcommand is None:
+        from .builder.augmentation import list_strategies
+        console.print("[yellow]Consolidation strategies (merge/clean, add no triples):[/yellow]")
+        for s in list_strategies(kind="consolidate"):
+            console.print(f"  • {s}")
 
 
 # =============================================================================

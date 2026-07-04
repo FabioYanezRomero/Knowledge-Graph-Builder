@@ -88,15 +88,21 @@ class KnowledgeDomain(ABC):
                 prompt_open.md
                 prompt_constrained.md
                 examples.json
-            augmentation/
-                connectivity/     # strategy folder
+            consolidation/
+                entity_resolution/   # merges/cleans, adds no knowledge
                     prompt.md
                     examples.json
-                enrichment/       # future strategy
-                    prompt.txt
+            augmentation/
+                connectivity/        # adds new (contextual) triples
+                    prompt.md
                     examples.json
             schema.json
+
+    Strategy folders are looked up under both augmentation/ and
+    consolidation/ — the split is taxonomy for humans; loading is uniform.
     """
+
+    _STRATEGY_DIRS = ("augmentation", "consolidation")
 
     def __init__(
         self,
@@ -145,15 +151,17 @@ class KnowledgeDomain(ABC):
             DomainResourceError: If the strategy folder doesn't exist
         """
         if strategy not in self._augmentation_cache:
-            strategy_dir = self._root_dir / "augmentation" / strategy
-            
-            if not strategy_dir.exists():
+            for parent in self._STRATEGY_DIRS:
+                strategy_dir = self._root_dir / parent / strategy
+                if strategy_dir.exists():
+                    break
+            else:
                 available = self.list_augmentation_strategies()
                 raise DomainResourceError(
-                    f"Unknown augmentation strategy '{strategy}'. Available: {', '.join(available) or 'none'}",
-                    resource_path=strategy_dir
+                    f"Unknown strategy '{strategy}'. Available: {', '.join(available) or 'none'}",
+                    resource_path=self._root_dir / "augmentation" / strategy
                 )
-            
+
             self._augmentation_cache[strategy] = DomainComponent(
                 prompt_path=strategy_dir / "prompt.md",
                 examples_path=strategy_dir / "examples.json",
@@ -162,15 +170,17 @@ class KnowledgeDomain(ABC):
         return self._augmentation_cache[strategy]
 
     def list_augmentation_strategies(self) -> list[str]:
-        """List all available augmentation strategies for this domain.
-        
+        """List all available strategies for this domain.
+
         Returns:
-            List of strategy names (folder names under augmentation/)
+            Sorted strategy names (folder names under augmentation/ and consolidation/)
         """
-        aug_dir = self._root_dir / "augmentation"
-        if not aug_dir.exists():
-            return []
-        return [d.name for d in aug_dir.iterdir() if d.is_dir()]
+        names = set()
+        for parent in self._STRATEGY_DIRS:
+            parent_dir = self._root_dir / parent
+            if parent_dir.exists():
+                names.update(d.name for d in parent_dir.iterdir() if d.is_dir())
+        return sorted(names)
 
     @property
     def schema(self) -> DomainSchema:

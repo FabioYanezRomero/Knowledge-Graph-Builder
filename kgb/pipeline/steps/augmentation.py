@@ -1,10 +1,13 @@
-"""Connectivity augmentation pipeline step."""
+"""Graph-operation pipeline steps: augment (adds knowledge) and
+consolidate (merges/cleans without adding any)."""
 
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from ...builder import augment_triples
+from ...builder.augmentation import strategy_kind
 from ...clients import BaseLLMClient
 from ...domains import KnowledgeDomain
 
@@ -14,8 +17,11 @@ from ..step import register_step
 
 @register_step("augment")
 class AugmentationStep:
-    """Pipeline step for refining extracted knowledge graphs."""
-    
+    """Pipeline step for augmentation strategies (add new triples)."""
+
+    EXPECTED_KIND = "augment"
+    METADATA_PREFIX = "augmentation_"
+
     def __init__(
         self, 
         client: BaseLLMClient, 
@@ -44,6 +50,14 @@ class AugmentationStep:
         self.max_iterations = max_iterations
         self.temperature = temperature
         self.augmentation_prompt_override = augmentation_prompt_override
+
+        actual_kind = strategy_kind(strategy)
+        if actual_kind != self.EXPECTED_KIND:
+            print(
+                f"Warning: strategy '{strategy}' is a '{actual_kind}' operation; "
+                f"prefer the '{'consolidate' if actual_kind == 'consolidate' else 'augment'}' step for it.",
+                file=sys.stderr,
+            )
 
     def process(self, context: PipelineContext, **kwargs: Any) -> PipelineContext:
         """Execute augmentation to connect graph components via inference.
@@ -76,11 +90,34 @@ class AugmentationStep:
             context.triples = triples
             
             # Store metadata
-            context.metadata["augmentation_" + self.strategy] = metadata
-            
+            context.metadata[self.METADATA_PREFIX + self.strategy] = metadata
+
         except Exception as e:
-            context.errors.append(f"Augmentation '{self.strategy}' failed: {str(e)}")
-            
+            context.errors.append(f"Strategy '{self.strategy}' failed: {str(e)}")
+
         return context
 
-__all__ = ["AugmentationStep"]
+
+@register_step("consolidate")
+class ConsolidationStep(AugmentationStep):
+    """Pipeline step for consolidation strategies (merge/clean existing
+    triples without adding knowledge) — e.g. entity_resolution.
+
+    Same machinery as AugmentationStep; the split is the taxonomy: run
+    consolidate after extract and/or after augment in the YAML steps list.
+    """
+
+    EXPECTED_KIND = "consolidate"
+    METADATA_PREFIX = "consolidation_"
+
+    def __init__(
+        self,
+        client: BaseLLMClient,
+        domain: KnowledgeDomain,
+        strategy: str = "entity_resolution",
+        **kwargs: Any,
+    ):
+        super().__init__(client, domain, strategy=strategy, **kwargs)
+
+
+__all__ = ["AugmentationStep", "ConsolidationStep"]

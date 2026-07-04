@@ -30,6 +30,14 @@ output_dir: outputs/pipeline_run_ollama
 #       client:
 #         model: gemma3:27b
 #       max_disconnected: 1
+#
+# `consolidate` (entity_resolution by default) merges/cleans triples without
+# adding knowledge; it can run after extract and/or after augment:
+#
+#   - extract
+#   - consolidate
+#   - augment
+#   - consolidate: {strategy: entity_resolution}
 steps:
   - extract
   - augment:

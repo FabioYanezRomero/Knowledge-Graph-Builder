@@ -66,12 +66,20 @@ The directory can live **anywhere** — inside `kgb/domains/` (for domains shipp
 │   ├── prompt_open.md          # Open extraction prompt
 │   ├── prompt_constrained.md   # Type-constrained extraction prompt
 │   └── examples.json           # Few-shot extraction examples
-├── augmentation/
+├── consolidation/              # Strategies that merge/clean (add no knowledge)
+│   └── entity_resolution/
+│       ├── prompt.md
+│       └── examples.json
+├── augmentation/               # Strategies that add new triples
 │   └── connectivity/           # Strategy folder (one per strategy)
-│       ├── prompt.md           # Strategy-specific augmentation prompt
-│       └── examples.json       # Few-shot augmentation examples
+│       ├── prompt.md           # Strategy-specific prompt
+│       └── examples.json       # Few-shot examples
 └── schema.json                 # Optional: entity/relation type constraints
 ```
+
+Strategy folders are looked up under both `consolidation/` and
+`augmentation/` — the split documents whether a strategy adds knowledge
+(augment) or merges existing knowledge (consolidate).
 
 > **File extensions**: Prompts use `.md` (markdown). The base class resolves `prompt_open.md` or `prompt_constrained.md` based on `extraction_mode`, and `prompt.md` for augmentation strategies.
 

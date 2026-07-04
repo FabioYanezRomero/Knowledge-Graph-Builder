@@ -6,7 +6,8 @@ A modular system for extracting knowledge graphs from text using multiple LLM ba
 
 - **Multi-Backend LLM Support** — Gemini API (cloud), Ollama (local), LM Studio (local)
 - **Knowledge Graph Extraction** — Structured triples (head-relation-tail) with source grounding via [langextract](https://github.com/langextract/langextract)
-- **Graph Augmentation** — Iterative strategies to bridge disconnected components
+- **Graph Consolidation** — Merge/clean operations that add no knowledge (entity resolution), runnable after extraction or augmentation
+- **Graph Augmentation** — Strategies that add new contextual triples (connectivity bridging)
 - **Origin Tracking** — Every triple tagged as `explicit` (extracted) or `contextual` (augmented)
 - **Interactive Visualizations** — Cytoscape.js interactive network graphs with node dragging, search/filter, and context menus; entity text highlighting
 - **Domain System** — Customizable prompts, examples, and schema constraints per knowledge domain
@@ -153,6 +154,7 @@ steps:
 |---------|-------------|
 | `kgb extract` | Extract knowledge graph triples from text |
 | `kgb augment connectivity` | Bridge disconnected graph components |
+| `kgb consolidate entity_resolution` | Merge entity name variants (adds no triples) |
 | `kgb convert` | Convert JSON triples to GraphML |
 | `kgb visualize network` | Interactive network graph (Cytoscape.js) |
 | `kgb visualize extraction` | Entity highlights in source text (langextract) |
@@ -349,12 +351,20 @@ my_usecase/
 │   ├── prompt_open.md           # Open extraction prompt
 │   ├── prompt_constrained.md    # Constrained extraction prompt
 │   └── examples.json            # Few-shot extraction examples
-├── augmentation/
-│   └── connectivity/            # Strategy-specific resources
+├── consolidation/               # Merge/clean strategies (add no knowledge)
+│   └── entity_resolution/
+│       ├── prompt.md
+│       └── examples.json
+├── augmentation/                # Strategies that add new triples
+│   └── connectivity/
 │       ├── prompt.md
 │       └── examples.json
 └── schema.json                  # Entity/relation type constraints
 ```
+
+Strategy folders are resolved under both `consolidation/` and `augmentation/`,
+so the split is taxonomy, not a loading contract — existing domains that keep
+everything under `augmentation/` continue to work.
 
 Domains are resolved in this order:
 

@@ -58,25 +58,48 @@ class AugmentationStrategy(Protocol):
 
 STRATEGIES: dict[str, AugmentationStrategy] = {}
 
+# Taxonomy of graph operations:
+#   "augment"     — adds knowledge that was not explicit (new triples,
+#                   typically marked as contextual inference)
+#   "consolidate" — merges/cleans existing knowledge without adding any
+#                   (entity resolution, deduplication, canonicalization)
+STRATEGY_KINDS: dict[str, str] = {}
 
-def register_strategy(name: str) -> Callable[[AugmentationStrategy], AugmentationStrategy]:
-    """Decorator for registering augmentation strategies.
-    
+
+def register_strategy(name: str, kind: str = "augment") -> Callable[[AugmentationStrategy], AugmentationStrategy]:
+    """Decorator for registering graph-operation strategies.
+
+    Args:
+        name: Strategy name (also the domain resource folder name).
+        kind: "augment" (adds new triples) or "consolidate" (merges/cleans
+            existing ones without adding knowledge).
+
     Usage:
         @register_strategy("my_strategy")
         def my_strategy(client, domain, text, triples, **kwargs):
             ...
             return refined_triples, metadata
     """
+    if kind not in ("augment", "consolidate"):
+        raise ValueError(f"Unknown strategy kind '{kind}'. Expected 'augment' or 'consolidate'.")
+
     def decorator(fn: AugmentationStrategy) -> AugmentationStrategy:
         STRATEGIES[name] = fn
+        STRATEGY_KINDS[name] = kind
         return fn
     return decorator
 
 
-def list_strategies() -> list[str]:
-    """List all registered augmentation strategies."""
-    return list(STRATEGIES.keys())
+def list_strategies(kind: str | None = None) -> list[str]:
+    """List registered strategies, optionally filtered by kind."""
+    if kind is None:
+        return list(STRATEGIES.keys())
+    return [n for n in STRATEGIES if STRATEGY_KINDS.get(n) == kind]
+
+
+def strategy_kind(name: str) -> str:
+    """Return the kind of a registered strategy (defaults to 'augment')."""
+    return STRATEGY_KINDS.get(name, "augment")
 
 
 # =============================================================================
@@ -380,7 +403,7 @@ def _apply_entity_mapping(
     return resolved
 
 
-@register_strategy("entity_resolution")
+@register_strategy("entity_resolution", kind="consolidate")
 def entity_resolution_strategy(
     client: BaseLLMClient,
     domain: KnowledgeDomain,
@@ -629,7 +652,9 @@ __all__ = [
     "AugmentationStrategy",
     "register_strategy",
     "list_strategies",
+    "strategy_kind",
     "STRATEGIES",
+    "STRATEGY_KINDS",
     "connectivity_strategy",
     "entity_resolution_strategy",
     "augment_triples",
