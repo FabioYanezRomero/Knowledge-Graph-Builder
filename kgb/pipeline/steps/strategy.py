@@ -13,7 +13,7 @@ import sys
 from typing import Any
 
 from ...builder import augment_triples
-from ...builder.strategies import strategy_kind
+from ...builder.strategies import strategy_kind, has_builtin_prompt
 from ...clients import BaseLLMClient
 from ...domains import KnowledgeDomain
 
@@ -67,7 +67,10 @@ class StrategyStep:
             context.metadata[self.METADATA_PREFIX + "skipped"] = "True (no initial triples found)"
             return context
 
-        if self.strategy not in self.domain.list_augmentation_strategies():
+        if (
+            self.strategy not in self.domain.list_augmentation_strategies()
+            and not has_builtin_prompt(self.strategy)
+        ):
             print(
                 f"Warning: domain has no '{self.strategy}' strategy; skipping "
                 f"{self.__class__.__name__} for record {context.record_id}.",

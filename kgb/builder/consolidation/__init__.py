@@ -24,6 +24,7 @@ from .sieves import (
 from .veto import discriminative_signature, merge_allowed, apply_discriminative_veto
 from .fuzzy import fuzzy_candidates
 from .entity_resolution import entity_resolution_strategy
+from .relation_resolution import relation_resolution_strategy
 
 __all__ = [
     "enforce_closed_set",
@@ -39,4 +40,5 @@ __all__ = [
     "apply_discriminative_veto",
     "fuzzy_candidates",
     "entity_resolution_strategy",
+    "relation_resolution_strategy",
 ]
