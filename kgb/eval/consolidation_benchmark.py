@@ -19,6 +19,8 @@ Run:  python -m kgb.eval.consolidation_benchmark
 
 from __future__ import annotations
 
+import argparse
+import glob
 import re
 from dataclasses import dataclass
 
@@ -27,6 +29,7 @@ from ..builder.consolidation import (
     merge_allowed,
     run_sieves,
     resolve_chains,
+    exact_match_sieve,
     acronym_sieve,
     DEFAULT_SIEVES,
 )
@@ -253,8 +256,98 @@ def format_report(results: dict) -> str:
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# Scale test on a real corpus (no manual labeling)
+# ---------------------------------------------------------------------------
+
+_TERM_RE = re.compile(r"\b([A-Z][A-Za-z0-9\-]+(?:\s+[A-Z][A-Za-z0-9\-]+){0,3})\b")
+
+
+def harvest_terms(corpus_dir: str) -> list[str]:
+    """Harvest distinct term-like strings from a directory of .txt files.
+
+    Deliberately simple/noisy: for the PRECISION test any two distinct real
+    strings should not merge unless they are genuine surface variants, so noise
+    (section headers, common words) only makes the test harder, not wrong.
+    """
+    terms: set[str] = set()
+    for path in glob.glob(f"{corpus_dir}/*.txt"):
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        for m in _TERM_RE.findall(text):
+            t = m.strip()
+            if 3 <= len(t) <= 40:
+                terms.add(t)
+    return sorted(terms)
+
+
+def _surface_variants(term: str) -> set[str]:
+    vs = {term.lower(), term.upper(), term.title(), term.replace("-", " "),
+          term.replace(" ", "  "), f" {term} "}
+    return {v for v in vs if v.strip() and v.strip() != term}
+
+
+def scale_precision(terms: list[str]) -> dict:
+    """Over all distinct-term pairs, count merges by exact_match. Genuine surface
+    variants merging is correct; anything else is a spurious over-merge."""
+    mapping = exact_match_sieve("", terms)
+    n = len(terms)
+    return {
+        "n_terms": n,
+        "total_pairs": n * (n - 1) // 2,
+        "merged": [(v, c) for v, c in mapping.items()],
+    }
+
+
+def scale_recall(terms: list[str]) -> dict:
+    """Fraction of generated surface variants that exact_match merges back.
+
+    Note: partly by-construction (variants are within normalization scope); its
+    value is catching normalization gaps (a variant type the rules miss)."""
+    merged = 0
+    missed: list[tuple[str, str]] = []
+    for t in terms:
+        for v in _surface_variants(t):
+            m = resolve_chains(exact_match_sieve("", [t, v]))
+            if m.get(t, t) == m.get(v, v) and (m.get(t) or m.get(v)):
+                merged += 1
+            else:
+                missed.append((t, v))
+    return {"merged": merged, "missed": len(missed), "miss_samples": missed[:15]}
+
+
+def run_scale(corpus_dir: str) -> dict | None:
+    terms = harvest_terms(corpus_dir)
+    if not terms:
+        return None
+    return {"precision": scale_precision(terms), "recall": scale_recall(terms)}
+
+
+def format_scale_report(scale: dict) -> str:
+    p, r = scale["precision"], scale["recall"]
+    lines = [
+        "=== Scale test on real corpus ===",
+        f"Distinct harvested terms: {p['n_terms']}  ({p['total_pairs']} pairs)",
+        f"Precision: exact_match merged {len(p['merged'])} pair(s) of {p['total_pairs']}",
+    ]
+    lines += [f"    '{v}' -> '{c}'" for v, c in p["merged"][:20]]
+    lines += [
+        f"Recall coverage: {r['merged']} surface variants merged, {r['missed']} missed",
+    ]
+    lines += [f"    MISS: '{t}' vs '{v}'" for t, v in r["miss_samples"]]
+    return "\n".join(lines)
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Consolidation benchmark")
+    parser.add_argument("--corpus", help="Directory of .txt files for a scale test")
+    args = parser.parse_args()
+
     print(format_report(run()))
+    if args.corpus:
+        scale = run_scale(args.corpus)
+        print()
+        print(format_scale_report(scale) if scale else f"No .txt corpus found at {args.corpus}")
 
 
 if __name__ == "__main__":
