@@ -21,6 +21,7 @@ from ..validation import (
     collect_schema_constraints,
     render_prompt_template,
 )
+from .fuzzy import fuzzy_candidates
 from .guard import enforce_closed_set
 from .sieves import run_sieves, resolve_chains
 from .veto import apply_discriminative_veto
@@ -128,6 +129,15 @@ def entity_resolution_strategy(
 
     entity_entries = [{"name": e, "edges": entity_context.get(e, [])} for e in reduced_entities]
     record: dict[str, Any] = {"entities": entity_entries}
+
+    # Fuzzy blocking: surface look-alike pairs as CANDIDATES for the LLM to
+    # judge (never merged here). Directs the LLM to morphological variants the
+    # exact-match sieve can't catch; veto-filtered so it isn't asked about
+    # numeric/staging siblings.
+    candidates = fuzzy_candidates(reduced_entities)
+    if candidates:
+        record["candidate_merges"] = [[a, b] for a, b, _ in candidates]
+
     if text:
         record["source_text_excerpt"] = text[:4000] + ("..." if len(text) > 4000 else "")
 
@@ -210,6 +220,7 @@ def entity_resolution_strategy(
         "status": "success",
         "entities_analyzed": len(entities),
         "sieve_merges": sieve_merges,
+        "fuzzy_candidates": len(candidates),
         "merge_groups": canonical_targets,
         "variants_mapped": merged_entities,
         "triples_before": triples_before,

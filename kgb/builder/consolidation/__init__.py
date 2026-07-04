@@ -22,6 +22,7 @@ from .sieves import (
     resolve_chains,
 )
 from .veto import discriminative_signature, merge_allowed, apply_discriminative_veto
+from .fuzzy import fuzzy_candidates
 from .entity_resolution import entity_resolution_strategy
 
 __all__ = [
@@ -36,5 +37,6 @@ __all__ = [
     "discriminative_signature",
     "merge_allowed",
     "apply_discriminative_veto",
+    "fuzzy_candidates",
     "entity_resolution_strategy",
 ]
