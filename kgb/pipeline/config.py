@@ -109,23 +109,49 @@ def build_pipeline_from_config(
         max_workers = int(max_workers)
     no_progress = _resolve(None, "", "no_progress", False)
 
-    config_kwargs: dict[str, Any] = {
-        "client_type": client_type,
+    default_client_vals: dict[str, Any] = {
+        "type": client_type,
+        "model": model_id,
+        "api_key": api_key,
+        "base_url": base_url,
         "temperature": temperature,
-        "show_progress": not no_progress,
         "timeout": timeout,
+        "workers": max_workers,
     }
-    if model_id:
-        config_kwargs["model_id"] = model_id
-    if api_key:
-        config_kwargs["api_key"] = api_key
-    if base_url:
-        config_kwargs["base_url"] = base_url
-    if max_workers:
-        config_kwargs["max_workers"] = max_workers
 
-    client_config = ClientConfig(**config_kwargs)
-    llm_client = ClientFactory.create(client_config)
+    # Identical client configs (default or per-step) share one instance.
+    client_cache: dict[tuple, Any] = {}
+
+    def _client_for(vals: dict[str, Any]) -> Any:
+        key = tuple(sorted((k, str(v)) for k, v in vals.items()))
+        if key not in client_cache:
+            ck: dict[str, Any] = {
+                "client_type": vals["type"],
+                "temperature": float(vals["temperature"]),
+                "show_progress": not no_progress,
+                "timeout": int(vals["timeout"]),
+            }
+            if vals.get("model"):
+                ck["model_id"] = vals["model"]
+            if vals.get("api_key"):
+                ck["api_key"] = vals["api_key"]
+            if vals.get("base_url"):
+                ck["base_url"] = vals["base_url"]
+            if vals.get("workers"):
+                ck["max_workers"] = int(vals["workers"])
+            client_cache[key] = ClientFactory.create(ClientConfig(**ck))
+        return client_cache[key]
+
+    def _merged_client_vals(override: dict[str, Any]) -> dict[str, Any]:
+        merged = dict(default_client_vals)
+        if override.get("type") and override["type"] != merged["type"]:
+            # Switching provider: don't drag provider-specific fields along.
+            for k in ("model", "api_key", "base_url"):
+                merged[k] = None
+        merged.update(override)
+        return merged
+
+    llm_client = _client_for(default_client_vals)
 
     # -- Domain ----------------------------------------------------------------
     domain_name = _resolve(raw_config, "domain", "domain", "default")
@@ -173,11 +199,20 @@ def build_pipeline_from_config(
         step_cls = get_step(step_name)
         kwargs: dict[str, Any] = dict(step_params)
 
-        # Inject shared objects based on step type.
+        # Inject shared objects based on step type. A step may carry its own
+        # `client:` mapping that overrides fields of the default client
+        # (e.g. a cheap model for extract, a strong one for augment).
         if step_name in _STEPS_NEEDING_CLIENT:
-            kwargs.setdefault("client", llm_client)
+            step_client_section = kwargs.pop("client", None)
+            step_temperature = temperature
+            if isinstance(step_client_section, dict):
+                step_vals = _merged_client_vals(step_client_section)
+                step_temperature = float(step_vals["temperature"])
+                kwargs["client"] = _client_for(step_vals)
+            else:
+                kwargs["client"] = llm_client
             kwargs.setdefault("domain", domain_obj)
-            kwargs.setdefault("temperature", temperature)
+            kwargs.setdefault("temperature", step_temperature)
 
         if step_name in _STEP_OUTPUT_SUBDIRS:
             subdir = _STEP_OUTPUT_SUBDIRS[step_name]

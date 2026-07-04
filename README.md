@@ -129,6 +129,22 @@ kgb run-pipeline --input data.jsonl --domain legal --client ollama \
   --extract --augment --convert --visualize
 ```
 
+In YAML mode, each `extract`/`augment` step can override the default client —
+use a cheap model for high-volume extraction and a stronger one where
+hallucination risk matters:
+
+```yaml
+client:            # default for all steps
+  type: ollama
+  model: gemma3:27b
+
+steps:
+  - extract:
+      client:
+        model: gemma3:1b   # only the listed fields are overridden
+  - augment
+```
+
 ---
 
 ## CLI Reference

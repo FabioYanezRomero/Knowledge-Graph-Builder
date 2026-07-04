@@ -19,6 +19,17 @@ input:
 
 output_dir: outputs/pipeline_run_ollama
 
+# Steps run with the default client above unless they declare their own
+# `client:` block, which overrides only the listed fields — e.g. a cheap
+# model for high-volume extraction and a stronger one for augmentation:
+#
+#   - extract:
+#       client:
+#         model: gemma3:1b
+#   - augment:
+#       client:
+#         model: gemma3:27b
+#       max_disconnected: 1
 steps:
   - extract
   - augment:
