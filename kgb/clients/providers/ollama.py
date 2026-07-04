@@ -20,6 +20,9 @@ class OllamaOpenAILanguageModel(OpenAILanguageModel):
     def __init__(self, **kwargs):
         # Extract timeout before super().__init__ discards it via **kwargs
         self._request_timeout = kwargs.pop("timeout", 600)
+        # Ollama generation controls, injected into the request via extra_body
+        self._think = kwargs.pop("think", None)
+        self._model_options = kwargs.pop("model_options", None)
         super().__init__(**kwargs)
         # Recreate OpenAI client with proper timeout for slow local models
         import openai
@@ -83,6 +86,16 @@ class OllamaOpenAILanguageModel(OpenAILanguageModel):
             if (v := model_config.get('max_output_tokens')) is not None:
                 api_params['max_tokens'] = v
 
+            # Ollama honors these via the OpenAI-compatible endpoint's extra body:
+            # `think` toggles the reasoning phase, `options` sets num_ctx etc.
+            extra_body: dict[str, Any] = {}
+            if self._think is not None:
+                extra_body['think'] = self._think
+            if self._model_options:
+                extra_body['options'] = self._model_options
+            if extra_body:
+                api_params['extra_body'] = extra_body
+
             response = self._client.chat.completions.create(**api_params)
             output_text = response.choices[0].message.content
 
@@ -114,7 +127,9 @@ class OllamaClient(BaseLLMClient):
         batch_length: int | None = None,
         max_char_buffer: int = 8000,
         show_progress: bool = True,
-        timeout: int = 120
+        timeout: int = 120,
+        think: bool | None = None,
+        options: dict | None = None,
     ) -> None:
         """Initialize Ollama client.
 
@@ -126,6 +141,8 @@ class OllamaClient(BaseLLMClient):
             max_char_buffer: Maximum characters for inference
             show_progress: Whether to show progress bar
             timeout: Request timeout in seconds
+            think: False disables the model's "thinking" phase (faster, more stable)
+            options: Extra Ollama generation options (num_ctx, top_p, num_predict, ...)
         """
         _defaults = load_provider_defaults("ollama")
         self.model_id = model_id or _defaults["model_id"]
@@ -135,6 +152,8 @@ class OllamaClient(BaseLLMClient):
         self.max_char_buffer = max_char_buffer
         self.show_progress = show_progress
         self.timeout = timeout
+        self.think = think
+        self.options = options
 
     def extract(
         self,
@@ -174,7 +193,9 @@ class OllamaClient(BaseLLMClient):
                 model_id=self.model_id,
                 api_key="ollama", # Placeholder for OpenAI provider
                 base_url=base_url,
-                timeout=self.timeout
+                timeout=self.timeout,
+                think=self.think,
+                model_options=self.options,
             )
 
             # Prepare langextract kwargs
@@ -297,18 +318,22 @@ Each object MUST have at minimum: "head", "relation", "tail" fields."""
             # Call Ollama API directly
             # NOTE: Do NOT use format:"json" - it forces single object responses
             # We want arrays like LMStudio, so rely on prompt instructions instead
+            payload: dict[str, Any] = {
+                "model": self.model_id,
+                "prompt": full_prompt,
+                "stream": False,
+                # "format": "json",  # DISABLED - forces single object, not array
+                "options": {
+                    "temperature": temperature if temperature is not None else 0.0,
+                    **({"num_predict": max_tokens} if max_tokens else {}),
+                    **(self.options or {}),  # num_ctx, top_p, ... from config
+                },
+            }
+            if self.think is not None:
+                payload["think"] = self.think  # top-level for /api/generate
             response = requests.post(
                 f"{self.base_url}/api/generate",
-                json={
-                    "model": self.model_id,
-                    "prompt": full_prompt,
-                    "stream": False,
-                    # "format": "json",  # DISABLED - forces single object, not array
-                    "options": {
-                        "temperature": temperature if temperature is not None else 0.0,
-                        **({"num_predict": max_tokens} if max_tokens else {}),
-                    }
-                },
+                json=payload,
                 timeout=self.timeout
             )
             response.raise_for_status()
@@ -386,6 +411,8 @@ Each object MUST have at minimum: "head", "relation", "tail" fields."""
             max_char_buffer=config.max_char_buffer,
             show_progress=config.show_progress,
             timeout=config.timeout,
+            think=config.think,
+            options=config.options,
         )
 
 

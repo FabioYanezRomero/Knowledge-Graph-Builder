@@ -41,5 +41,9 @@ class ClientConfig:
     base_url: str | None = None
     timeout: int = 120
 
+    # Ollama generation controls (ignored by other providers)
+    think: bool | None = None       # False disables the model's "thinking" phase
+    options: dict | None = None     # extra Ollama options: num_ctx, top_p, num_predict, ...
+
 
 __all__ = ["ClientConfig", "ClientType"]
