@@ -11,11 +11,15 @@ Modules:
 
 from .guard import enforce_closed_set
 from .schwartz_hearst import extract_abbreviation_pairs
+from .veto import discriminative_signature, merge_allowed, apply_discriminative_veto
 from .entity_resolution import entity_resolution_strategy, acronym_mapping
 
 __all__ = [
     "enforce_closed_set",
     "extract_abbreviation_pairs",
+    "discriminative_signature",
+    "merge_allowed",
+    "apply_discriminative_veto",
     "entity_resolution_strategy",
     "acronym_mapping",
 ]

@@ -22,6 +22,7 @@ from ..validation import (
 )
 from .guard import enforce_closed_set
 from .schwartz_hearst import extract_abbreviation_pairs
+from .veto import apply_discriminative_veto
 
 
 def _collect_unique_entities(triples: list[Triple]) -> list[str]:
@@ -172,7 +173,17 @@ def entity_resolution_strategy(
                 if v_str and v_str != canonical:
                     mapping[v_str] = canonical
 
-    # 3. Closed-set guard over the combined mapping.
+    # 3. Discriminative veto: block surface-similar-but-distinct merges
+    #    (numeric/staging siblings) over the combined mapping.
+    mapping, vetoed_mappings = apply_discriminative_veto(mapping)
+    if vetoed_mappings:
+        print(
+            f"  Entity resolution: vetoed {len(vetoed_mappings)} merge(s) differing "
+            f"in a discriminative token (numeric/staging)",
+            flush=True,
+        )
+
+    # 4. Closed-set guard over the combined mapping.
     mapping, rejected_mappings = enforce_closed_set(mapping, entity_set)
     if rejected_mappings:
         print(
@@ -188,6 +199,7 @@ def entity_resolution_strategy(
             "status": "no_merges",
             "entities_analyzed": len(entities),
             "acronym_merges": acronym_merges,
+            "vetoed_mappings": vetoed_mappings,
             "rejected_mappings": rejected_mappings,
         }
 
@@ -213,6 +225,7 @@ def entity_resolution_strategy(
         "triples_after": triples_after,
         "duplicates_removed": deduped,
         "mapping": mapping,
+        "vetoed_mappings": vetoed_mappings,
         "rejected_mappings": rejected_mappings,
     }
 
