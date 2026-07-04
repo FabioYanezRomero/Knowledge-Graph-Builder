@@ -22,7 +22,14 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from ..builder.consolidation import extract_abbreviation_pairs, merge_allowed
+from ..builder.consolidation import (
+    extract_abbreviation_pairs,
+    merge_allowed,
+    run_sieves,
+    resolve_chains,
+    acronym_sieve,
+    DEFAULT_SIEVES,
+)
 
 
 @dataclass(frozen=True)
@@ -31,6 +38,7 @@ class Pair:
     b: str
     should_merge: bool
     category: str
+    text: str = ""  # source context (needed for the acronym sieve)
 
 
 # Small hand-seeded set: the semantic cases no deterministic rule can auto-label.
@@ -48,6 +56,26 @@ SEED_PAIRS: list[Pair] = [
     # negatives the current veto does NOT cover (no number/roman) — the known gap
     Pair("left kidney", "right kidney", False, "laterality"),
     Pair("positive margin", "negative margin", False, "polarity"),
+]
+
+# Surface-layer positives the sieve bag should catch WITHOUT the LLM. Split by
+# which sieve is responsible, to show the improvement from adding exact_match.
+SIEVE_POSITIVES: list[Pair] = [
+    Pair("Bladder", "bladder", True, "case"),
+    Pair("T-cell", "T cell", True, "punctuation"),
+    Pair("prostate  gland", "prostate gland", True, "whitespace"),
+    Pair("PSA", "prostate-specific antigen", True, "acronym",
+         text="prostate-specific antigen (PSA)"),
+    Pair("TURBT", "transurethral resection of bladder tumor", True, "acronym",
+         text="transurethral resection of bladder tumor (TURBT)"),
+]
+
+# Negatives the sieve bag must NOT merge (precision = no regression).
+SIEVE_NEGATIVES: list[Pair] = [
+    Pair("Gleason 3+4", "Gleason 4+3", False, "numeric-order"),
+    Pair("IL-6", "IL-10", False, "numeric-diff"),
+    Pair("stage II", "stage III", False, "roman-staging"),
+    Pair("prostate", "prostate adenocarcinoma", False, "distinct-specificity"),
 ]
 
 # Entities used to auto-generate hard negatives by perturbing a discriminative token.
@@ -108,6 +136,37 @@ def evaluate_veto(pairs: list[Pair]) -> dict:
     }
 
 
+def _bag_merges(pair: Pair, sieves) -> bool:
+    """Does the sieve bag merge this pair's two entities into one canonical?"""
+    mapping = resolve_chains(run_sieves(pair.text, [pair.a, pair.b], sieves))
+    return mapping.get(pair.a, pair.a) == mapping.get(pair.b, pair.b)
+
+
+def evaluate_sieve_bag(pairs: list[Pair], sieves) -> dict:
+    """Precision/recall of a sieve configuration on labeled pairs.
+
+    Precision < 1.0 would be a regression (the sieves merged something they
+    should not). Recall shows coverage of surface positives.
+    """
+    tp = fp = fn = tn = 0
+    false_merges: list[Pair] = []
+    for p in pairs:
+        merged = _bag_merges(p, sieves)
+        if p.should_merge and merged:
+            tp += 1
+        elif p.should_merge and not merged:
+            fn += 1
+        elif not p.should_merge and merged:
+            fp += 1
+            false_merges.append(p)
+        else:
+            tn += 1
+    precision = tp / (tp + fp) if (tp + fp) else 1.0
+    recall = tp / (tp + fn) if (tp + fn) else 1.0
+    return {"tp": tp, "fp": fp, "fn": fn, "tn": tn,
+            "precision": precision, "recall": recall, "false_merges": false_merges}
+
+
 def evaluate_sh(definitions: list[tuple[str, str, str]]) -> dict:
     """Recall of Schwartz-Hearst on sentences that define an acronym.
 
@@ -136,7 +195,20 @@ def run() -> dict:
     pairs = SEED_PAIRS + generate_hard_negatives()
     veto = evaluate_veto(pairs)
     sh = evaluate_sh(_SH_DEFINITIONS)
-    return {"veto": veto, "sh": sh, "n_pairs": len(pairs)}
+
+    # No-regression / improvement: run the sieve bag on surface positives +
+    # negatives, comparing Schwartz-Hearst alone vs the full bag.
+    sieve_pairs = SIEVE_POSITIVES + SIEVE_NEGATIVES
+    sh_only = evaluate_sieve_bag(sieve_pairs, [acronym_sieve])
+    full_bag = evaluate_sieve_bag(sieve_pairs, DEFAULT_SIEVES)
+
+    return {
+        "veto": veto,
+        "sh": sh,
+        "n_pairs": len(pairs),
+        "sieve_sh_only": sh_only,
+        "sieve_full_bag": full_bag,
+    }
 
 
 def format_report(results: dict) -> str:
@@ -164,6 +236,20 @@ def format_report(results: dict) -> str:
     ]
     if sh["missed"]:
         lines.append(f"  missed: {', '.join(sh['missed'])}")
+
+    sh_only = results["sieve_sh_only"]
+    full = results["sieve_full_bag"]
+    lines += [
+        "",
+        "Sieve bag (no-regression = precision 1.0; improvement = recall up):",
+        f"  SH-only:   precision={sh_only['precision']:.2f}  recall={sh_only['recall']:.2f}  (TP={sh_only['tp']} FP={sh_only['fp']} FN={sh_only['fn']})",
+        f"  Full bag:  precision={full['precision']:.2f}  recall={full['recall']:.2f}  (TP={full['tp']} FP={full['fp']} FN={full['fn']})",
+    ]
+    if full["false_merges"]:
+        lines.append("  REGRESSION — false merges by the full bag:")
+        lines += [f"    - {p.a}  vs  {p.b}  [{p.category}]" for p in full["false_merges"]]
+    else:
+        lines.append("  No false merges by the full bag (precision preserved).")
     return "\n".join(lines)
 
 

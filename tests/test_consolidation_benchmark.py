@@ -28,3 +28,18 @@ def test_generated_hard_negatives_are_blocked():
 def test_schwartz_hearst_full_recall_on_definitions():
     sh = run()["sh"]
     assert sh["found"] == sh["total"], sh["missed"]
+
+
+def test_sieve_bag_no_regression_precision_preserved():
+    # The full bag must never merge something it shouldn't (precision == 1.0).
+    full = run()["sieve_full_bag"]
+    assert full["precision"] == 1.0, full["false_merges"]
+    assert full["fp"] == 0, full["false_merges"]
+
+
+def test_sieve_bag_improves_recall_over_sh_only():
+    r = run()
+    # Adding exact_match strictly increases recall on surface positives...
+    assert r["sieve_full_bag"]["recall"] > r["sieve_sh_only"]["recall"]
+    # ...without losing any (full bag catches every surface positive).
+    assert r["sieve_full_bag"]["recall"] == 1.0
