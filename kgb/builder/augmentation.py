@@ -97,6 +97,36 @@ def list_strategies(kind: str | None = None) -> list[str]:
     return [n for n in STRATEGIES if STRATEGY_KINDS.get(n) == kind]
 
 
+def enforce_closed_set(
+    mapping: dict[str, str],
+    entity_set: set[str],
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """Closed-set guard for consolidation: normalization may relabel entities
+    only to names that already exist in the graph.
+
+    A merge whose canonical target is not an existing entity would introduce a
+    node with no extraction grounding, so it is rejected. This is the invariant
+    that keeps text-reading and LLM stages from smuggling ungrounded entities
+    into the graph.
+
+    Args:
+        mapping: Proposed variant -> canonical rewrites.
+        entity_set: The entities that actually exist in the graph.
+
+    Returns:
+        (kept, rejected) — kept mappings, and the (variant, canonical) pairs
+        dropped because their canonical is not an existing entity.
+    """
+    kept: dict[str, str] = {}
+    rejected: list[tuple[str, str]] = []
+    for variant, canonical in mapping.items():
+        if canonical in entity_set:
+            kept[variant] = canonical
+        else:
+            rejected.append((variant, canonical))
+    return kept, rejected
+
+
 def strategy_kind(name: str) -> str:
     """Return the kind of a registered strategy (defaults to 'augment')."""
     return STRATEGY_KINDS.get(name, "augment")
@@ -511,12 +541,23 @@ def entity_resolution_strategy(
                     if v_str and v_str != canonical:
                         mapping[v_str] = canonical
 
+    # 5b. Closed-set guard: reject merges whose canonical isn't an existing
+    #     entity, so the LLM can only collapse real nodes, never invent one.
+    mapping, rejected_mappings = enforce_closed_set(mapping, set(entities))
+    if rejected_mappings:
+        print(
+            f"  Entity resolution: rejected {len(rejected_mappings)} merge(s) with "
+            f"non-existent canonical (closed-set guard)",
+            flush=True,
+        )
+
     if not mapping:
         print("  Entity resolution: LLM returned no merge groups", flush=True)
         return triples, {
             "strategy": "entity_resolution",
             "status": "no_merges",
             "entities_analyzed": len(entities),
+            "rejected_mappings": rejected_mappings,
         }
 
     # 6. Apply mapping
@@ -542,6 +583,7 @@ def entity_resolution_strategy(
         "triples_after": triples_after,
         "duplicates_removed": deduped,
         "mapping": mapping,
+        "rejected_mappings": rejected_mappings,
     }
 
     return resolved_triples, metadata
@@ -653,6 +695,7 @@ __all__ = [
     "register_strategy",
     "list_strategies",
     "strategy_kind",
+    "enforce_closed_set",
     "STRATEGIES",
     "STRATEGY_KINDS",
     "connectivity_strategy",

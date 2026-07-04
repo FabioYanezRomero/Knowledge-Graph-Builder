@@ -33,6 +33,9 @@ _STEP_OUTPUT_SUBDIRS: dict[str, str] = {
 # Steps that require the shared LLM client and domain objects.
 _STEPS_NEEDING_CLIENT = {"extract", "augment", "consolidate"}
 
+# Steps that transform the triple set — snapshotted after each when trace is on.
+_TRIPLE_TRANSFORMING_STEPS = {"extract", "augment", "consolidate"}
+
 
 def load_pipeline_config(path: str | Path) -> dict[str, Any]:
     """Read and return the raw YAML pipeline configuration.
@@ -184,6 +187,12 @@ def build_pipeline_from_config(
     steps_list: list = raw_config["steps"]
     steps_sequence = []
 
+    # When trace is on, snapshot the triples after each transforming stage into
+    # output_dir/trace/<NN>_<stage>/ so we can see where entities are lost or
+    # wrongly merged, instead of only inspecting the final output.
+    trace = bool(_resolve(raw_config, "trace", "trace", False))
+    trace_counter = 0
+
     for entry in steps_list:
         if isinstance(entry, str):
             step_name = entry
@@ -219,6 +228,11 @@ def build_pipeline_from_config(
             kwargs.setdefault("output_dir", output_dir / subdir)
 
         steps_sequence.append(step_cls(**kwargs))
+
+        if trace and step_name in _TRIPLE_TRANSFORMING_STEPS:
+            trace_counter += 1
+            snapshot_dir = output_dir / "trace" / f"{trace_counter:02d}_{step_name}"
+            steps_sequence.append(get_step("export-json")(output_dir=snapshot_dir))
 
     if not steps_sequence:
         raise ValueError("Pipeline config defines no steps")
