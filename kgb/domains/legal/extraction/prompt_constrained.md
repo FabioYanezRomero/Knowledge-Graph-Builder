@@ -7,6 +7,10 @@ Extraction Guidelines:
 - Use exact text spans for extractions - do not paraphrase
 - Split complex phrases into smaller meaningful entities when appropriate
 - Focus ONLY on explicit information (not inferred relationships)
+- Ground EVERY salient entity as a node, even with no stated relation. For a
+  standalone entity emit a typing triple: (entity, is_type_of, <category>), e.g.
+  (Companies Act 2006, is_type_of, statute). Never drop a mentioned party,
+  court, statute, or instrument for lack of a relation.
 
 Entity Types:
 - Legal parties: plaintiffs, defendants, appellants, respondents

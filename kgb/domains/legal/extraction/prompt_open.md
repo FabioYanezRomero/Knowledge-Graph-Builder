@@ -27,6 +27,14 @@ Examples of resolution:
 - "The court ruled..." → "Court of Appeal ruled..." (if that court was handling the case)
 - "He was convicted" → "Mr Norris was convicted" (using the named party)
 
+## Entity Completeness (grounding)
+Ground EVERY salient legal entity as a node, even when the text states no
+relationship for it — do not drop a party, court, statute, or instrument just
+because it is unconnected. For a standalone entity, emit a typing triple:
+(entity, is_type_of, <category>), e.g. (Companies Act 2006, is_type_of, statute),
+(Court of Appeal, is_type_of, court). Typing an entity by its evident category
+is grounding, not inference.
+
 ## Guidelines
 - Normalize entity names consistently throughout extraction
 - Use concise, descriptive relation labels

@@ -39,5 +39,58 @@
         }
       }
     ]
+  },
+  {
+    "text": "The patient underwent cystoscopy and TURBT. A Foley catheter was placed. No residual tumor was seen.",
+    "extractions": [
+      {
+        "extraction_class": "Triple",
+        "extraction_text": "cystoscopy",
+        "char_start": 22,
+        "char_end": 32,
+        "attributes": {
+          "head": "cystoscopy",
+          "relation": "is_type",
+          "tail": "procedure",
+          "inference": "explicit"
+        }
+      },
+      {
+        "extraction_class": "Triple",
+        "extraction_text": "TURBT",
+        "char_start": 37,
+        "char_end": 42,
+        "attributes": {
+          "head": "TURBT",
+          "relation": "is_type",
+          "tail": "procedure",
+          "inference": "explicit"
+        }
+      },
+      {
+        "extraction_class": "Triple",
+        "extraction_text": "Foley catheter",
+        "char_start": 46,
+        "char_end": 60,
+        "attributes": {
+          "head": "Foley catheter",
+          "relation": "is_type",
+          "tail": "device",
+          "inference": "explicit"
+        }
+      },
+      {
+        "extraction_class": "Triple",
+        "extraction_text": "No residual tumor",
+        "char_start": 73,
+        "char_end": 90,
+        "attributes": {
+          "head": "residual tumor",
+          "relation": "is_present",
+          "tail": "no",
+          "inference": "explicit"
+        }
+      }
+    ]
   }
 ]
