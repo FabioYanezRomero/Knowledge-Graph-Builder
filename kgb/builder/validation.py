@@ -15,15 +15,6 @@ from typing import Any
 
 from ..domains import DomainSchema, ExtractionMode, KnowledgeDomain, Triple
 
-_TYPE_RELATION_ALIASES = {
-    "is_type",
-    "is_type_of",
-    "type_of",
-    "instance_of",
-    "entity_type",
-    "category_of",
-}
-
 
 @dataclass(frozen=True)
 class SchemaConstraints:
@@ -34,6 +25,7 @@ class SchemaConstraints:
     relation_types: tuple[str, ...]
     normalized_entity_types: frozenset[str]
     normalized_relation_types: frozenset[str]
+    normalized_type_relations: frozenset[str]
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +68,7 @@ def collect_schema_constraints(
 ) -> SchemaConstraints:
     """Build a normalized constraint set from the schema and domain examples."""
     if domain.extraction_mode != ExtractionMode.CONSTRAINED:
-        return SchemaConstraints(False, tuple(), tuple(), frozenset(), frozenset())
+        return SchemaConstraints(False, tuple(), tuple(), frozenset(), frozenset(), frozenset())
 
     schema: DomainSchema = domain.schema
 
@@ -106,12 +98,17 @@ def collect_schema_constraints(
             if isinstance(relation, str):
                 _register_relation(relation)
 
+    normalized_type_relations = frozenset(
+        normalize_constraint_label(label) for label in schema.type_relations
+    ) - {""}
+
     return SchemaConstraints(
         enforce=bool(entity_types or relation_types),
         entity_types=tuple(entity_types),
         relation_types=tuple(relation_types),
         normalized_entity_types=frozenset(normalized_entity_types),
         normalized_relation_types=frozenset(normalized_relation_types),
+        normalized_type_relations=normalized_type_relations,
     )
 
 
@@ -216,7 +213,7 @@ def validate_entity_types(
         ]
         return not invalid_labels, invalid_labels
 
-    if normalize_constraint_label(triple.relation) in _TYPE_RELATION_ALIASES:
+    if normalize_constraint_label(triple.relation) in constraints.normalized_type_relations:
         candidate_labels = [triple.head, triple.tail]
         is_valid = any(
             normalize_constraint_label(label) in constraints.normalized_entity_types

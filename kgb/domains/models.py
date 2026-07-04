@@ -106,16 +106,31 @@ class AugmentationExample(BaseModel):
     output: list[Triple]
 
 
+# Relations that express "X is-a-type-of Y". Used to validate entity types on
+# typing triples. Declared here (domain layer) rather than hardcoded in the
+# builder; a domain can override it in schema.json for its own conventions or
+# language (e.g. "es_tipo_de").
+DEFAULT_TYPE_RELATIONS = [
+    "is_type",
+    "is_type_of",
+    "type_of",
+    "instance_of",
+    "entity_type",
+    "category_of",
+]
+
+
 class DomainSchema(BaseModel):
     """Schema defining allowed entity and relation types for a domain.
-    
+
     Used in 'constrained' extraction mode to limit the types of
     entities and relations the LLM can extract.
     """
     model_config = ConfigDict(frozen=True)
-    
+
     entity_types: list[str] = Field(default_factory=list)
     relation_types: list[str] = Field(default_factory=list)
+    type_relations: list[str] = Field(default_factory=lambda: list(DEFAULT_TYPE_RELATIONS))
 
 
 class DomainExamples(BaseModel):
