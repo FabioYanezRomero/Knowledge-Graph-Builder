@@ -1,53 +1,27 @@
-"""Consolidation strategies: merge/clean existing knowledge without adding any.
+"""Entity resolution: canonicalize entity names across triples.
 
-Consolidation operates on an already-extracted graph and never introduces
-entities or relations absent from it (the closed-set invariant enforced by
-enforce_closed_set). Currently provides entity_resolution; future stages
-(acronym expansion, discriminative veto) will land here too.
+Two layers, deterministic-first:
+1. A Schwartz-Hearst pre-pass reads the source text for acronym/expansion pairs
+   and merges them when BOTH forms already exist as entities (closed-set, no
+   LLM, no cost).
+2. The LLM clusters the remaining variants (synonyms, morphological variants)
+   using edge context, and its output is filtered through the closed-set guard.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from ..clients import BaseLLMClient
-from ..domains import KnowledgeDomain, Triple
-from .strategies import register_strategy
-from .validation import (
+from ...clients import BaseLLMClient
+from ...domains import KnowledgeDomain, Triple
+from ..strategies import register_strategy
+from ..validation import (
     build_schema_guidance,
     collect_schema_constraints,
     render_prompt_template,
 )
-
-
-def enforce_closed_set(
-    mapping: dict[str, str],
-    entity_set: set[str],
-) -> tuple[dict[str, str], list[tuple[str, str]]]:
-    """Closed-set guard for consolidation: normalization may relabel entities
-    only to names that already exist in the graph.
-
-    A merge whose canonical target is not an existing entity would introduce a
-    node with no extraction grounding, so it is rejected. This is the invariant
-    that keeps text-reading and LLM stages from smuggling ungrounded entities
-    into the graph.
-
-    Args:
-        mapping: Proposed variant -> canonical rewrites.
-        entity_set: The entities that actually exist in the graph.
-
-    Returns:
-        (kept, rejected) — kept mappings, and the (variant, canonical) pairs
-        dropped because their canonical is not an existing entity.
-    """
-    kept: dict[str, str] = {}
-    rejected: list[tuple[str, str]] = []
-    for variant, canonical in mapping.items():
-        if canonical in entity_set:
-            kept[variant] = canonical
-        else:
-            rejected.append((variant, canonical))
-    return kept, rejected
+from .guard import enforce_closed_set
+from .schwartz_hearst import extract_abbreviation_pairs
 
 
 def _collect_unique_entities(triples: list[Triple]) -> list[str]:
@@ -84,6 +58,24 @@ def _build_entity_context(entities: list[str], triples: list[Triple]) -> dict[st
     return context
 
 
+def acronym_mapping(text: str, entities: list[str]) -> dict[str, str]:
+    """Deterministic acronym → expansion merges via Schwartz-Hearst.
+
+    Extracts (short, long) pairs from the text, then keeps only those where
+    BOTH forms match an existing entity (case-insensitive). Returns a
+    short_entity -> long_entity mapping (the expansion is canonical). Never
+    introduces an entity absent from the graph.
+    """
+    by_norm = {e.lower(): e for e in entities}
+    mapping: dict[str, str] = {}
+    for short, long in extract_abbreviation_pairs(text):
+        short_e = by_norm.get(short.lower())
+        long_e = by_norm.get(long.lower())
+        if short_e and long_e and short_e != long_e:
+            mapping[short_e] = long_e
+    return mapping
+
+
 def _apply_entity_mapping(
     triples: list[Triple], mapping: dict[str, str]
 ) -> list[Triple]:
@@ -92,7 +84,6 @@ def _apply_entity_mapping(
     Matching is case-insensitive because LLMs often return lowercased variants
     even when the original entities had proper casing.
     """
-    # Build a case-insensitive lookup
     ci_mapping: dict[str, str] = {}
     for variant, canonical in mapping.items():
         ci_mapping[variant.lower().strip()] = canonical
@@ -124,51 +115,34 @@ def entity_resolution_strategy(
     augmentation_prompt_override: str | None = None,
     **kwargs: Any,
 ) -> tuple[list[Triple], dict[str, Any]]:
-    """Entity resolution: canonicalize entity names across triples.
+    """Entity resolution: merge entity name variants into canonical names.
 
-    Collects all unique entity strings, asks the LLM to cluster variants
-    and pick canonical names, then rewrites every triple and deduplicates.
-
-    This strategy does NOT generate new triples — it only merges existing
-    entities and removes resulting duplicates.
-
-    Args:
-        client: LLM client
-        domain: Knowledge domain (must have entity_resolution strategy folder)
-        text: Source text (context for ambiguous cases)
-        triples: Existing triples to resolve
-        temperature: Sampling temperature
-        max_tokens: Max tokens for LLM
-        augmentation_prompt_override: Override the default prompt
+    Does NOT generate new triples — it only merges existing entities and removes
+    resulting duplicates, and never introduces an entity absent from the graph.
 
     Returns:
         Tuple of (resolved_triples, metadata)
     """
-    # 1. Collect unique entities and their context (triples they appear in)
     entities = _collect_unique_entities(triples)
     if len(entities) <= 1:
         return triples, {"strategy": "entity_resolution", "status": "skipped", "reason": "<=1 entity"}
 
-    entity_context = _build_entity_context(entities, triples)
+    entity_set = set(entities)
 
-    # 2. Load prompt from domain
+    # 1. Deterministic pre-pass: Schwartz-Hearst acronym/expansion merges,
+    #    already closed to existing entities.
+    mapping = acronym_mapping(text, entities)
+    acronym_merges = len(mapping)
+
+    # 2. LLM pass: cluster the remaining variants using edge context.
+    entity_context = _build_entity_context(entities, triples)
     er_component = domain.get_augmentation("entity_resolution")
     prompt_template = augmentation_prompt_override or er_component.prompt
     constraints = collect_schema_constraints(domain, er_component.examples)
 
-    # 3. Build prompt with entity list, their graph context, and source text
-    #    The LLM needs to see HOW each entity is used in order to decide
-    #    whether "Salvino" and "Michael J. Salvino" are truly the same.
-    entity_entries = []
-    for e in entities:
-        edges = entity_context.get(e, [])
-        entry = {"name": e, "edges": edges}
-        entity_entries.append(entry)
-
+    entity_entries = [{"name": e, "edges": entity_context.get(e, [])} for e in entities]
     record: dict[str, Any] = {"entities": entity_entries}
-    # Include a text excerpt so the LLM has document context for ambiguous cases
     if text:
-        # Truncate to ~4000 chars to keep prompt size reasonable
         record["source_text_excerpt"] = text[:4000] + ("..." if len(text) > 4000 else "")
 
     final_prompt = render_prompt_template(
@@ -177,11 +151,8 @@ def entity_resolution_strategy(
         schema_guidance=build_schema_guidance(constraints),
     )
 
-    # 4. Call LLM
-    print(f"  Entity resolution: {len(entities)} unique entities, asking LLM to cluster...", flush=True)
+    print(f"  Entity resolution: {len(entities)} entities ({acronym_merges} acronym merges), asking LLM to cluster...", flush=True)
 
-    # We need a raw text response (not structured extraction), so use augment()
-    # with Triple as a dummy format_type. We'll parse the JSON ourselves.
     raw_results = client.augment(
         text=final_prompt,
         prompt_description="Identify entity name variants and map them to canonical names",
@@ -190,9 +161,6 @@ def entity_resolution_strategy(
         max_tokens=max_tokens,
     )
 
-    # 5. Parse mapping from response into variant -> canonical. augment()
-    #    returns list[dict]; process every {canonical, variants} group.
-    mapping: dict[str, str] = {}
     for group in raw_results or []:
         if not isinstance(group, dict) or "canonical" not in group:
             continue
@@ -204,9 +172,8 @@ def entity_resolution_strategy(
                 if v_str and v_str != canonical:
                     mapping[v_str] = canonical
 
-    # 5b. Closed-set guard: reject merges whose canonical isn't an existing
-    #     entity, so the LLM can only collapse real nodes, never invent one.
-    mapping, rejected_mappings = enforce_closed_set(mapping, set(entities))
+    # 3. Closed-set guard over the combined mapping.
+    mapping, rejected_mappings = enforce_closed_set(mapping, entity_set)
     if rejected_mappings:
         print(
             f"  Entity resolution: rejected {len(rejected_mappings)} merge(s) with "
@@ -215,18 +182,17 @@ def entity_resolution_strategy(
         )
 
     if not mapping:
-        print("  Entity resolution: LLM returned no merge groups", flush=True)
+        print("  Entity resolution: no merges", flush=True)
         return triples, {
             "strategy": "entity_resolution",
             "status": "no_merges",
             "entities_analyzed": len(entities),
+            "acronym_merges": acronym_merges,
             "rejected_mappings": rejected_mappings,
         }
 
-    # 6. Apply mapping
     resolved_triples = _apply_entity_mapping(triples, mapping)
 
-    # Count stats
     merged_entities = len(mapping)
     canonical_targets = len(set(mapping.values()))
     triples_before = len(triples)
@@ -240,6 +206,7 @@ def entity_resolution_strategy(
         "strategy": "entity_resolution",
         "status": "success",
         "entities_analyzed": len(entities),
+        "acronym_merges": acronym_merges,
         "merge_groups": canonical_targets,
         "variants_mapped": merged_entities,
         "triples_before": triples_before,
@@ -252,4 +219,4 @@ def entity_resolution_strategy(
     return resolved_triples, metadata
 
 
-__all__ = ["enforce_closed_set", "entity_resolution_strategy"]
+__all__ = ["entity_resolution_strategy", "acronym_mapping"]

@@ -1,9 +1,24 @@
 """Knowledge Graph Builder module.
 
-This module provides the core engines for constructing a knowledge graph:
-- Extraction: Converting raw text into initial triples.
-- Augmentation: Adding knowledge not explicit in the text (connectivity).
-- Consolidation: Merging/cleaning existing knowledge (entity resolution).
+Three operation types, each with a home in this package:
+- Extraction   text -> triples. The SOURCE of triples (extraction.py, via
+               langextract). Not a strategy; a future ExtractStrategy protocol +
+               registry lands here when a second extractor (e.g. multi-model
+               consensus) exists.
+- Augmentation triples -> triples that ADD knowledge not explicit in the text
+               (augmentation.py: connectivity).
+- Consolidation triples -> triples that MERGE/CLEAN without adding knowledge
+               (consolidation/: entity_resolution + Schwartz-Hearst + guard).
+
+Shared core:
+- strategies.py  GraphStrategy protocol + registry (augment/consolidate) and
+                 the strategy orchestrator (augment_triples).
+- validation.py  schema constraints, validation, prompt rendering.
+
+Folder-structure plan: an operation becomes a subpackage (like consolidation/)
+when it grows past ~2 files or gains a second implementation; until then it stays
+a single .py (extraction.py, augmentation.py). Migrate area by area, driven by
+real growth, not up front.
 
 Extensibility:
 - Use `@register_strategy(name, kind)` to add a strategy (kind: augment/consolidate).
