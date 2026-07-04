@@ -12,6 +12,15 @@ from langextract import data
 from ..domains import Triple, InferenceType
 
 
+def _iter_head_tail(triples: list[Triple] | list[dict[str, Any]]):
+    """Yield (head, tail) for each triple, accepting Triple objects or dicts."""
+    for t in triples:
+        if isinstance(t, Triple):
+            yield t.head, t.tail
+        elif isinstance(t, dict):
+            yield t.get("head", ""), t.get("tail", "")
+
+
 class TextVisualizer:
     """Create interactive HTML visualizations of extracted triples in source text.
 
@@ -314,7 +323,7 @@ class TextVisualizer:
                 </div>
                 <div class="stat-item">
                     Entities
-                    <b>{len(set(getattr(t, 'head', t.get('head', '')) for t in triples) | set(getattr(t, 'tail', t.get('tail', '')) for t in triples))}</b>
+                    <b>{len({name for h, t in _iter_head_tail(triples) for name in (h, t)})}</b>
                 </div>
                 <div class="stat-item">
                     Triples
