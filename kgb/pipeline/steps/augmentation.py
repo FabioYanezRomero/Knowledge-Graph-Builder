@@ -7,7 +7,7 @@ import sys
 from typing import Any
 
 from ...builder import augment_triples
-from ...builder.augmentation import strategy_kind
+from ...builder.strategies import strategy_kind
 from ...clients import BaseLLMClient
 from ...domains import KnowledgeDomain
 

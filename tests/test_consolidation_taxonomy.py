@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from kgb.builder.augmentation import list_strategies, strategy_kind
+from kgb.builder.strategies import list_strategies, strategy_kind
 from kgb.domains import get_domain
 from kgb.pipeline import config as pipeline_config
 from kgb.pipeline.steps.augmentation import AugmentationStep, ConsolidationStep

@@ -1,6 +1,6 @@
 """Closed-set guard: consolidation may only relabel to existing entities."""
 
-from kgb.builder.augmentation import enforce_closed_set
+from kgb.builder.consolidation import enforce_closed_set
 
 
 def test_keeps_mappings_to_existing_entities():

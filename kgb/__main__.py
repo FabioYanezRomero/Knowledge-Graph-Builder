@@ -652,7 +652,7 @@ def consolidate_entity_resolution(
 def augment_default(ctx: typer.Context):
     """Show available augmentation strategies."""
     if ctx.invoked_subcommand is None:
-        from .builder.augmentation import list_strategies
+        from .builder.strategies import list_strategies
         console.print("[yellow]Augmentation strategies (add new triples):[/yellow]")
         for s in list_strategies(kind="augment"):
             console.print(f"  • {s}")
@@ -662,7 +662,7 @@ def augment_default(ctx: typer.Context):
 def consolidate_default(ctx: typer.Context):
     """Show available consolidation strategies."""
     if ctx.invoked_subcommand is None:
-        from .builder.augmentation import list_strategies
+        from .builder.strategies import list_strategies
         console.print("[yellow]Consolidation strategies (merge/clean, add no triples):[/yellow]")
         for s in list_strategies(kind="consolidate"):
             console.print(f"  • {s}")
