@@ -27,7 +27,8 @@ steps:
   - extract
   - consolidate            # entity_resolution: merge entity name variants (adds no triples)
   - augment:
-      max_disconnected: 1
+      max_disconnected: 3   # don't force one component: a report holds independent facts;
+                            # forcing connectivity fabricates hub/filler edges (see reports/)
       max_iterations: 3
   - export-json
   - convert
