@@ -32,8 +32,8 @@ class ConverterStep:
         Returns:
             PipelineContext with graphml extraction artifact metadata attached.
         """
-        if not context.triples:
-            context.metadata["convert_skipped"] = "True (no triples to convert)"
+        if not context.triples and not context.entities:
+            context.metadata["convert_skipped"] = "True (no triples or entities to convert)"
             return context
 
         try:
@@ -41,7 +41,7 @@ class ConverterStep:
             output_path = self.output_dir / f"{context.record_id}.graphml"
             
             # Using the json_to_graphml method which accepts lists of Triples directly
-            json_to_graphml(triples=context.triples, output_path=output_path)
+            json_to_graphml(triples=context.triples, output_path=output_path, entities=context.entities)
             
             context.artifacts["graphml_path"] = str(output_path)
             

@@ -29,8 +29,11 @@ class CheckpointStep:
             self.output_dir.mkdir(parents=True, exist_ok=True)
 
             triples_path = self.output_dir / f"{context.record_id}.json"
+            records = [t.model_dump() for t in context.triples]
+            # standalone entities preserved as empty-relation records (isolated nodes)
+            records += [{"head": e, "relation": "", "tail": ""} for e in context.entities]
             with open(triples_path, "w", encoding="utf-8") as f:
-                json.dump([t.model_dump() for t in context.triples], f, ensure_ascii=False, indent=2)
+                json.dump(records, f, ensure_ascii=False, indent=2)
 
             meta_path = self.output_dir / f"{context.record_id}.meta.json"
             with open(meta_path, "w", encoding="utf-8") as f:

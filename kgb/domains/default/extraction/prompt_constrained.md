@@ -8,9 +8,10 @@ events, and entities described in the input text.
 - Identify entities and relations explicitly stated in the text.
 - Prefer splitting complex phrases into smaller meaningful entities.
 - Every explicit triple must be labeled with "inference": "explicit".
-- Ground EVERY salient entity as a node, even with no stated relation. For a
-  standalone entity emit a typing triple: (entity, is_type, <category>), e.g.
-  (Ottawa, is_type, city). Never drop a mentioned entity for lack of a relation.
+- Ground EVERY salient entity as a node. Emit a triple ONLY when the relation is
+  named in the text — never fabricate one (no is_type). If an entity has no
+  stated relation, emit it standalone with empty relation/tail:
+  {"head": "<entity>", "relation": "", "tail": ""}. Never drop a mentioned entity.
 
 {{schema_constraints}}
 

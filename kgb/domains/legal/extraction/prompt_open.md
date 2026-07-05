@@ -28,12 +28,11 @@ Examples of resolution:
 - "He was convicted" → "Mr Norris was convicted" (using the named party)
 
 ## Entity Completeness (grounding)
-Ground EVERY salient legal entity as a node, even when the text states no
-relationship for it — do not drop a party, court, statute, or instrument just
-because it is unconnected. For a standalone entity, emit a typing triple:
-(entity, is_type_of, <category>), e.g. (Companies Act 2006, is_type_of, statute),
-(Court of Appeal, is_type_of, court). Typing an entity by its evident category
-is grounding, not inference.
+Ground EVERY salient legal entity as a node. Emit a (head, relation, tail) triple
+ONLY when the relation is named in the text — never fabricate a relation
+(including type relations) that is not stated. If a party, court, statute, or
+instrument has no stated relation, emit it as a standalone node with empty
+relation/tail: {"head": "<entity>", "relation": "", "tail": ""}. Do not drop it.
 
 ## Guidelines
 - Normalize entity names consistently throughout extraction

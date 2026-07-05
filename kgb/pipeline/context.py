@@ -23,6 +23,13 @@ class PipelineContext(BaseModel):
         default_factory=list,
         description="The extracted/augmented knowledge graph triples for this document."
     )
+
+    entities: list[str] = Field(
+        default_factory=list,
+        description="Grounded standalone entities with no relation stated in the text; "
+                    "carried as isolated graph nodes (extraction is grounding-only, so it "
+                    "never fabricates a relation just to attach them)."
+    )
     
     metadata: dict[str, Any] = Field(
         default_factory=dict,

@@ -49,7 +49,7 @@ class ExtractionStep:
             PipelineContext updated with extracted triples.
         """
         try:
-            triples = extract_triples(
+            triples, entities = extract_triples(
                 client=self.client,
                 domain=self.domain,
                 text=context.text,
@@ -58,6 +58,7 @@ class ExtractionStep:
                 prompt_override=self.prompt_override
             )
             context.triples.extend(triples)
+            context.entities.extend(entities)
         except Exception as e:
             context.errors.append(f"Extraction failed: {str(e)}")
             

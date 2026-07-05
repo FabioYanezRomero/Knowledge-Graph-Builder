@@ -73,7 +73,7 @@ def extract_triples(
     temperature: float = 0.0,
     max_tokens: int | None = None,
     prompt_override: str | None = None
-) -> list[Triple]:
+) -> tuple[list[Triple], list[str]]:
     """Extract triples from a single text.
 
     Args:
@@ -86,7 +86,8 @@ def extract_triples(
         prompt_override: Optional prompt template override
 
     Returns:
-        List of extracted Triple objects
+        (triples, standalone_entities) — triples are grounded relations; standalone
+        entities are grounded nodes with no relation stated in the text.
     """
     record = {"text": text}
     if record_id:
@@ -114,8 +115,21 @@ def extract_triples(
 
     triples = []
     normalized_raw_triples: list[dict[str, Any]] = []
+    entities: list[str] = []
+    seen_entities: set[str] = set()
     for t in raw_triples:
         if not isinstance(t, dict):
+            continue
+        head = str(t.get("head", "")).strip()
+        relation = str(t.get("relation", "")).strip()
+        tail = str(t.get("tail", "")).strip()
+        # Grounding-only: a standalone entity (relation/tail absent because the
+        # text states no relation for it) becomes an isolated node, never a
+        # fabricated triple.
+        if head and (not relation or not tail):
+            if head not in seen_entities:
+                seen_entities.add(head)
+                entities.append(head)
             continue
         normalized = normalize_triple(t)
         if normalized:
@@ -128,4 +142,4 @@ def extract_triples(
         raw_triples=normalized_raw_triples,
     )
     warn_on_schema_validation("extraction", validation_summary)
-    return validated_triples
+    return validated_triples, entities

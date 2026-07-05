@@ -7,10 +7,10 @@ Extract all clinically salient ENTITIES and the relationships among them, as tri
  
 (head, relation, tail)
  
-Capture every salient entity as a node (typing it when it has no relation — see
-Principle 0), and represent explicit findings, diagnoses, anatomical
-localization, biomarker status, grading, staging, procedures, and clinically
-meaningful pathological relationships.
+Capture every salient entity (as a standalone node when the text states no
+relation for it — see Principle 0), and represent explicit findings, diagnoses,
+anatomical localization, biomarker status, grading, staging, procedures, and
+clinically meaningful pathological relationships that are named in the text.
  
 # Domain Focus
 Focus specifically on:
@@ -26,25 +26,25 @@ Focus specifically on:
  
 # Extraction Principles
  
-## 0. Ground EVERY Salient Entity (completeness)
-Every clinically salient entity mentioned in the text MUST appear as a node,
-even when the text states no relationship for it. Complete grounding is the
-priority: never drop an entity just because it is unconnected. Missing a
+## 0. Ground EVERY Salient Entity — but never fabricate a relation
+Every clinically salient entity mentioned in the text MUST appear. Missing a
 mentioned procedure, specimen, device, or finding is a grounding failure.
 
-For an entity that has no stated relation, ground it with a TYPING triple:
+Extract a (head, relation, tail) triple ONLY when the relation is explicitly
+NAMED in the text. Do NOT invent a relation — including type/category relations
+like "is_type" — that is not literally stated.
 
-(entity, is_type, <category>)
+If a salient entity has NO relation stated in the text, emit it as a STANDALONE
+entity so it still becomes a node, using an EMPTY relation and tail:
 
-Examples:
-- (TURBT, is_type, procedure)
-- (cystoscope, is_type, device)
-- (ureteral orifice, is_type, anatomical_site)
-- (Foley catheter, is_type, device)
+{"head": "<entity>", "relation": "", "tail": ""}
 
-Assigning an entity its evident clinical category is grounding, not
-speculation. Use a category from "Entity Types" below (or another concise
-clinical type). Typing triples are "inference": "explicit".
+Examples of standalone entities (merely mentioned, no relation in the text):
+- {"head": "TURBT", "relation": "", "tail": ""}
+- {"head": "Foley catheter", "relation": "", "tail": ""}
+- {"head": "ciprofloxacin", "relation": "", "tail": ""}
+
+Never drop an entity, and never attach it with a made-up relation.
 
 ---
  
@@ -167,8 +167,9 @@ Use concise biomedical entity types where possible:
 - Preserve exact pathology terminology.
 - Include evidence spans exactly as written in the report.
 - Avoid duplicate triples.
-- Never drop a salient entity for lack of a relation — ground it with a typing
-  triple (see Principle 0). Return an empty list ONLY if the text contains no
+- Never drop a salient entity for lack of a relation — emit it as a standalone
+  entity with empty relation/tail (see Principle 0). Only relations named in the
+  text may appear as triples. Return an empty list ONLY if the text contains no
   salient entities at all.
  
 ---

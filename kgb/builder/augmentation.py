@@ -285,7 +285,7 @@ def augment_triples(
         initial_schema_validation = validation_summary
         warn_on_schema_validation("augmentation bootstrap", validation_summary)
     else:
-        triples = extract_triples(
+        triples, _ = extract_triples(
             client, domain, text, record_id, temperature, max_tokens, prompt_override
         )
 

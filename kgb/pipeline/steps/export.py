@@ -36,8 +36,10 @@ class ExportJSONStep:
             self.output_dir.mkdir(parents=True, exist_ok=True)
             output_path = self.output_dir / f"{context.record_id}.json"
             
+            records = [t.model_dump() for t in context.triples]
+            records += [{"head": e, "relation": "", "tail": ""} for e in context.entities]
             with open(output_path, "w", encoding="utf-8") as f:
-                json.dump([t.model_dump() for t in context.triples], f, ensure_ascii=False, indent=2)
+                json.dump(records, f, ensure_ascii=False, indent=2)
                 
             # Log output artifacts mapping
             context.artifacts["export_json_path"] = str(output_path)

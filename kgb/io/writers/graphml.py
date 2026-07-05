@@ -56,7 +56,8 @@ from ...domains import Triple
 
 def json_to_graphml(
     triples: list[Triple] | list[dict[str, Any]],
-    output_path: Path | str | None = None
+    output_path: Path | str | None = None,
+    entities: list[str] | None = None,
 ) -> nx.DiGraph:
     """Convert a list of triples to a NetworkX DiGraph.
 
@@ -66,6 +67,7 @@ def json_to_graphml(
     Args:
         triples: List of extracted triples (Triple objects or dicts)
         output_path: Optional path to save GraphML file
+        entities: Grounded standalone entities to add as isolated nodes (no edge).
 
     Returns:
         NetworkX directed graph
@@ -73,12 +75,19 @@ def json_to_graphml(
     G = nx.DiGraph()
     entity_map: dict[str, str] = {}
 
-    # Ensure we have Triple objects
+    # Ensure we have Triple objects. Standalone-entity dicts (empty relation/tail,
+    # i.e. grounded nodes with no relation stated) are routed to isolated nodes
+    # instead of being dropped by Triple validation.
+    standalone: list[str] = list(entities or [])
     validated_triples: list[Triple] = []
     for t in triples:
         if isinstance(t, Triple):
             validated_triples.append(t)
-        else:
+        elif isinstance(t, dict):
+            head = str(t.get("head", "")).strip()
+            if head and (not str(t.get("relation", "")).strip() or not str(t.get("tail", "")).strip()):
+                standalone.append(head)
+                continue
             try:
                 validated_triples.append(Triple(**t))
             except Exception:
@@ -104,6 +113,13 @@ def json_to_graphml(
         }
 
         G.add_edge(head, tail, **edge_attrs)
+
+    # Add grounded standalone entities as isolated nodes (canonicalized like the
+    # rest, so an isolated entity dedupes with the same name appearing in a triple).
+    for name in standalone:
+        canon = get_canonical_name(name, entity_map)
+        if canon and canon not in G.nodes():
+            G.add_node(canon)
 
     # Save if path provided
     if output_path:

@@ -451,7 +451,7 @@ def extract(
             output_path = json_dir / f"{record_id}.json"
             
             console.print(f"Processing {record_id} (extract only)...")
-            triples = extract_triples(
+            triples, entities = extract_triples(
                 client=llm_client,
                 domain=domain_obj,
                 text=text,
@@ -459,12 +459,15 @@ def extract(
                 temperature=temperature,
                 prompt_override=prompt_override.read_text() if prompt_override else None
             )
-            
+            # Standalone entities are preserved as empty-relation records so the
+            # downstream converter can add them as isolated nodes.
+            records = [t.model_dump() for t in triples]
+            records += [{"head": e, "relation": "", "tail": ""} for e in entities]
             with open(output_path, "w", encoding="utf-8") as f:
-                json.dump([t.model_dump() for t in triples], f, ensure_ascii=False, indent=2)
-            
+                json.dump(records, f, ensure_ascii=False, indent=2)
+
             output_files[record_id] = output_path
-            console.print(f"  → {len(triples)} triples saved")
+            console.print(f"  → {len(triples)} triples, {len(entities)} standalone entities saved")
         
         console.print(f"\n[bold green]✓ Extraction complete.[/bold green]")
         console.print(f"Output: {json_dir} ({len(output_files)} files)")
