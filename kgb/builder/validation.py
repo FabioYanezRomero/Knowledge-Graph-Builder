@@ -158,6 +158,32 @@ def render_prompt_template(
 # Triple normalization
 # ---------------------------------------------------------------------------
 
+# Recognized triple field names. Local models are inconsistent about key casing
+# (e.g. gemma emits "Tail" for most objects but "tail" for the first), which
+# silently drops the value under case-sensitive reads. We canonicalize these to
+# lowercase; every other key is left untouched.
+_TRIPLE_FIELD_KEYS = frozenset({
+    "head", "relation", "tail", "inference", "justification", "evidence",
+    "extraction_text", "char_start", "char_end",
+    "head_type", "tail_type", "entity_type", "source_type", "target_type",
+})
+
+
+def canonicalize_triple_keys(raw_triple: dict[str, Any]) -> dict[str, Any]:
+    """Lower-case recognized field names so a mis-cased key (``"Tail"``) is not
+    silently lost. A real lowercase key always wins over a mis-cased duplicate."""
+    out: dict[str, Any] = {}
+    for k, v in raw_triple.items():
+        if isinstance(k, str) and k.lower() in _TRIPLE_FIELD_KEYS:
+            lk = k.lower()
+            if lk in out and k != lk:  # don't let "Tail" clobber an existing "tail"
+                continue
+            out[lk] = v
+        else:
+            out[k] = v
+    return out
+
+
 def normalize_triple(raw_triple: dict[str, Any]) -> Triple | None:
     """Normalize a raw extraction to standard Triple format."""
     try:

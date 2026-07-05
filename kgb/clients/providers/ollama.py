@@ -326,9 +326,13 @@ class OllamaClient(BaseLLMClient):
                                 pass
                     
                     if attrs:
-                        # Ensure it's a dict
-                        triple = dict(attrs)
-                        
+                        # Ensure it's a dict. Canonicalize key casing first: local
+                        # models emit e.g. "Tail" instead of "tail" inconsistently,
+                        # which would fail the case-sensitive guard below and drop
+                        # the triple. Deferred import avoids a clients<->builder cycle.
+                        from ...builder.validation import canonicalize_triple_keys
+                        triple = canonicalize_triple_keys(dict(attrs))
+
                         # Add source grounding information from langextract
                         if extraction.char_interval:
                             triple["char_start"] = extraction.char_interval.start_pos

@@ -10,6 +10,7 @@ from ..domains import KnowledgeDomain, Triple
 from .validation import (
     SchemaConstraints,
     build_schema_guidance,
+    canonicalize_triple_keys,
     collect_schema_constraints,
     normalize_triple,
     render_prompt_template,
@@ -120,6 +121,9 @@ def extract_triples(
     for t in raw_triples:
         if not isinstance(t, dict):
             continue
+        # Local models are inconsistent about key casing (e.g. "Tail" vs "tail");
+        # canonicalize before any case-sensitive read so values aren't dropped.
+        t = canonicalize_triple_keys(t)
         head = str(t.get("head", "")).strip()
         relation = str(t.get("relation", "")).strip()
         tail = str(t.get("tail", "")).strip()
