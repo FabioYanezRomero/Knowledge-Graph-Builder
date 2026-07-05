@@ -34,9 +34,9 @@ from ..validation import (
     collect_schema_constraints,
     render_prompt_template,
 )
-from .fuzzy import fuzzy_candidates
-from .guard import enforce_closed_set
-from .sieves import resolve_chains
+from .layers.fuzzy import fuzzy_candidates
+from .layers.guard import enforce_closed_set
+from .layers.sieves import resolve_chains
 
 
 _DEFAULT_RELATION_PROMPT = """You are an expert in relation normalization for knowledge graphs.

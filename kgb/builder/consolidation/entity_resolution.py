@@ -21,10 +21,10 @@ from ..validation import (
     collect_schema_constraints,
     render_prompt_template,
 )
-from .fuzzy import fuzzy_candidates
-from .guard import enforce_closed_set
-from .sieves import run_sieves, resolve_chains
-from .veto import apply_discriminative_veto
+from .layers.fuzzy import fuzzy_candidates
+from .layers.guard import enforce_closed_set
+from .layers.sieves import run_sieves, resolve_chains
+from .layers.veto import apply_discriminative_veto
 
 
 def _collect_unique_entities(triples: list[Triple]) -> list[str]:

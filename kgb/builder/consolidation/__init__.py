@@ -1,19 +1,27 @@
-"""Consolidation: merge/clean existing knowledge without adding any.
+"""Consolidation: merge/clean an existing graph without adding knowledge.
 
 Consolidation operates on an already-extracted graph and never introduces
-entities or relations absent from it (the closed-set invariant in guard.py).
+entities or relations absent from it (the closed-set invariant in
+``layers/guard.py``).
 
-Modules:
-- guard.py            closed-set invariant (enforce_closed_set)
-- schwartz_hearst.py  deterministic acronym/expansion extraction from text
-- sieves.py           deterministic sieve bag (multi-pass, precision-ordered)
-- veto.py             discriminative-signature veto
-- entity_resolution.py the strategy (sieve bag -> LLM -> veto -> guard)
+Structure mirrors the architecture — strategies are pipelines, layers are the
+reusable steps they compose:
+
+- ``entity_resolution.py`` / ``relation_resolution.py`` — the STRATEGIES the
+  pipeline invokes (a ``consolidate`` step dispatches to one of these).
+- ``layers/`` — the reusable building blocks each strategy composes, ordered
+  ``deterministic-merge → fuzzy-propose → LLM-decide → deterministic-filter``.
+
+Composition (what each strategy actually uses):
+- entity_resolution   = sieves + fuzzy + LLM + veto + guard   (all five)
+- relation_resolution = fuzzy + LLM + guard                   (no sieves/veto —
+  relation labels have no source spans and the fuzzy veto already declines the
+  pairs veto would catch)
 """
 
-from .guard import enforce_closed_set
-from .schwartz_hearst import extract_abbreviation_pairs
-from .sieves import (
+from .layers.guard import enforce_closed_set
+from .layers.schwartz_hearst import extract_abbreviation_pairs
+from .layers.sieves import (
     exact_match_sieve,
     acronym_sieve,
     acronym_mapping,
@@ -21,8 +29,8 @@ from .sieves import (
     run_sieves,
     resolve_chains,
 )
-from .veto import discriminative_signature, merge_allowed, apply_discriminative_veto
-from .fuzzy import fuzzy_candidates
+from .layers.veto import discriminative_signature, merge_allowed, apply_discriminative_veto
+from .layers.fuzzy import fuzzy_candidates
 from .entity_resolution import entity_resolution_strategy
 from .relation_resolution import relation_resolution_strategy
 

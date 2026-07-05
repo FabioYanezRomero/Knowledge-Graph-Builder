@@ -6,7 +6,7 @@ from kgb.builder.consolidation import (
     resolve_chains,
     acronym_mapping,
 )
-from kgb.builder.consolidation.sieves import _normalize
+from kgb.builder.consolidation.layers.sieves import _normalize
 
 
 def test_exact_match_normalizes_case_and_punctuation():
