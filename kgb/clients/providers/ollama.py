@@ -1,9 +1,7 @@
-import dataclasses
-from typing import TYPE_CHECKING, Any, Iterator, Sequence, Mapping
+from typing import TYPE_CHECKING, Any
+import requests
 import langextract as lx
-from langextract.providers.openai import OpenAILanguageModel
-from langextract.core import types as core_types
-from langextract.core import exceptions as lx_exceptions
+from langextract.providers.ollama import OllamaLanguageModel
 
 from ..base import BaseLLMClient, LLMClientError
 from ..defaults import load_provider_defaults
@@ -13,102 +11,66 @@ if TYPE_CHECKING:
     from ..config import ClientConfig
 
 
-@dataclasses.dataclass(init=False)
-class OllamaOpenAILanguageModel(OpenAILanguageModel):
-    """Custom OpenAI model for Ollama that removes unsupported response_format."""
+class _ThinkInjectingRequests:
+    """Wraps the ``requests`` module so Ollama ``/api/generate`` calls carry a
+    top-level ``think`` flag (and extra options).
 
-    def __init__(self, **kwargs):
-        # Extract timeout before super().__init__ discards it via **kwargs
-        self._request_timeout = kwargs.pop("timeout", 600)
-        # Ollama generation controls, injected into the request via extra_body
-        self._think = kwargs.pop("think", None)
-        self._model_options = kwargs.pop("model_options", None)
-        super().__init__(**kwargs)
-        # Recreate OpenAI client with proper timeout for slow local models
-        import openai
-        self._client = openai.OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url,
-            organization=self.organization,
-            timeout=self._request_timeout,
-        )
-        
-    @property
-    def requires_fence_output(self) -> bool:
-        """Ollama/LM Studio output needs fences when not using structured mode."""
-        return True
+    This is the ONLY reliable way to disable gemma-style reasoning on Ollama:
+    the OpenAI-compatible endpoint ignores ``think`` entirely, and the native
+    endpoint ignores it inside ``options`` — it must sit at the request-body top
+    level, which langextract's native provider doesn't expose. The provider
+    reads its HTTP client from ``self._requests``, so we swap in this shim.
+    """
 
-    @staticmethod
-    def _sanitize_control_chars(text: str) -> str:
-        """Remove invalid JSON control characters from LLM output.
+    def __init__(self, real, think: bool | None, options: dict | None):
+        self._real = real
+        self._think = think
+        self._options = options
 
-        Some local models emit raw control characters (tabs, newlines, etc.)
-        inside JSON string values, which causes json.loads() to fail with
-        'Invalid control character'.  We replace them with spaces.
-        """
-        import re
-        # Replace control chars (U+0000–U+001F) except \n \r \t which are
-        # commonly present in fenced output and handled by langextract.
-        # Inside JSON *strings* these are illegal, but we can't easily
-        # distinguish string-interior vs structural whitespace here, so we
-        # only strip the truly unusual ones (NUL, BEL, BS, VT, FF, etc.).
-        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', ' ', text)
-
-    def _process_single_prompt(self, prompt: str, config: dict[str, Any]) -> core_types.ScoredOutput:
-        """Override to remove response_format and add logging."""
-        try:
-            # Get model configuration
-            model_config = self.merge_kwargs(config)
-
-            # Explicitly remove response_format as it can cause issues in Ollama/LM Studio
-            model_config.pop('response_format', None)
-
-            # Standard system message for JSON
-            system_message = (
-                "You are a helpful assistant that extracts information into structured JSON. "
-                "Follow the provided format Exactly, matching the field names and structure of the examples. "
-                "You may use ```json code fences. Do not include any preamble or extra explanations."
-            )
-
-            messages = [{'role': 'user', 'content': prompt}]
-            messages.insert(0, {'role': 'system', 'content': system_message})
-
-            api_params = {
-                'model': self.model_id,
-                'messages': messages,
-                'n': 1,
-            }
-
-            temp = model_config.get('temperature', self.temperature)
-            if temp is not None:
-                api_params['temperature'] = temp
-
-            if (v := model_config.get('max_output_tokens')) is not None:
-                api_params['max_tokens'] = v
-
-            # Ollama honors these via the OpenAI-compatible endpoint's extra body:
-            # `think` toggles the reasoning phase, `options` sets num_ctx etc.
-            extra_body: dict[str, Any] = {}
+    def post(self, url, *args, **kwargs):
+        payload = kwargs.get("json")
+        if isinstance(payload, dict):
             if self._think is not None:
-                extra_body['think'] = self._think
-            if self._model_options:
-                extra_body['options'] = self._model_options
-            if extra_body:
-                api_params['extra_body'] = extra_body
+                payload["think"] = self._think
+            if self._options:
+                payload.setdefault("options", {}).update(self._options)
+        return self._real.post(url, *args, **kwargs)
 
-            response = self._client.chat.completions.create(**api_params)
-            output_text = response.choices[0].message.content
+    def __getattr__(self, name):  # forward .exceptions and anything else
+        return getattr(self._real, name)
 
-            # Sanitize control characters that break JSON parsing
-            if output_text:
-                output_text = self._sanitize_control_chars(output_text)
 
-            return core_types.ScoredOutput(score=1.0, output=output_text)
+def _repair_json_text(text: str) -> str:
+    """Fix the two JSON defects local models emit that break strict parsing:
+    stray control characters and trailing commas before ``}``/``]``. The old
+    OpenAI-compat wrapper tolerated these; the native provider's parser doesn't."""
+    import re
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", " ", text)  # control chars
+    text = re.sub(r",(\s*[}\]])", r"\1", text)                  # trailing commas
+    return text
 
-        except Exception as e:
-            raise lx_exceptions.InferenceRuntimeError(
-                f'Ollama OpenAI API error: {str(e)}', original=e
-            ) from e
+
+class OllamaExtractionModel(OllamaLanguageModel):
+    """Native Ollama provider (/api/generate) for extraction.
+
+    Chosen over the OpenAI-compatible endpoint because only the native endpoint
+    honors a top-level ``think`` flag (disabling gemma-style reasoning, which
+    otherwise makes extraction ~4x slower and time out). Injects ``think`` +
+    options via the ``_requests`` shim and repairs common JSON defects before
+    langextract's strict parser sees them.
+    """
+
+    def __init__(self, *args, think: bool | None = None, model_options: dict | None = None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if think is not None or model_options:
+            self._requests = _ThinkInjectingRequests(requests, think, dict(model_options or {}))
+
+    def _ollama_query(self, *args, **kwargs):
+        resp = super()._ollama_query(*args, **kwargs)
+        if isinstance(resp, dict) and isinstance(resp.get("response"), str):
+            resp = dict(resp)
+            resp["response"] = _repair_json_text(resp["response"])
+        return resp
 
 
 @client("ollama")
@@ -183,16 +145,13 @@ class OllamaClient(BaseLLMClient):
             LLMClientError: If extraction fails
         """
         try:
-            # Ensure base_url ends with /v1 for the OpenAI provider
-            base_url = self.base_url
-            if not base_url.endswith('/v1') and not base_url.endswith('/v1/'):
-                base_url = base_url.rstrip('/') + '/v1'
-
-            # Create Ollama OpenAI language model
-            ollama_model = OllamaOpenAILanguageModel(
+            # Use langextract's NATIVE Ollama provider (/api/generate), not the
+            # OpenAI-compatible endpoint: only the native endpoint honors a
+            # top-level `think` flag to disable reasoning (the OpenAI-compat one
+            # ignores it, so extraction would always run slow "thinking" mode).
+            ollama_model = OllamaExtractionModel(
                 model_id=self.model_id,
-                api_key="ollama", # Placeholder for OpenAI provider
-                base_url=base_url,
+                model_url=self.base_url,
                 timeout=self.timeout,
                 think=self.think,
                 model_options=self.options,
