@@ -282,7 +282,13 @@ def run_pipeline(
             resolved_output = cli_overrides.get("output_dir", raw_config.get("output_dir", "outputs/pipeline_run"))
             console.print(f"Pipeline [green]{config_name}[/green] | {len(contexts)} records | {len(runner.steps)} steps")
 
-            results = runner.execute_batch(contexts, max_workers=max_workers, show_progress=not no_progress)
+            # The YAML's client.workers governs the LLM client; without an explicit
+            # --workers it should also cap pipeline-level (cross-document) concurrency,
+            # else local low-parallelism backends (MLX) get flooded and wedge.
+            batch_workers = max_workers
+            if batch_workers is None:
+                batch_workers = (raw_config.get("client", {}) or {}).get("workers")
+            results = runner.execute_batch(contexts, max_workers=batch_workers, show_progress=not no_progress)
 
             successes = sum(1 for c in results if not c.errors)
             errors = sum(1 for c in results if c.errors)
