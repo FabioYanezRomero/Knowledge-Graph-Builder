@@ -7,6 +7,11 @@ description: Manage knowledge domains (e.g., Medical, Finance). Covers adding ne
 
 This skill documents how to add a new knowledge domain. A domain is a **directory of resources — no Python code required**.
 
+> **Prompt quality:** this skill covers the mechanical wiring. For *what to put in
+> the prompts* (grounding-only extraction, connectivity that doesn't fabricate,
+> layered consolidation), follow the **`kg-domain-quality`** skill — the example
+> prompts below are minimal and deliberately conservative to match it.
+
 ## Overview
 
 Domains are bundled resource sets containing prompts and few-shot examples for extraction and augmentation. The system provides:
@@ -90,16 +95,24 @@ Strategy folders are looked up under both `consolidation/` and
 Create `extraction/prompt_open.md`:
 
 ```markdown
-Extract all knowledge graph triples from the following biomedical text.
-Focus on explicit relationships between biomedical entities.
+Extract knowledge graph triples from the following biomedical text.
 
-For each relationship identified, extract:
-- **head**: The source entity
-- **relation**: The relationship type
-- **tail**: The target entity
+Emit a (head, relation, tail) triple ONLY when the text states a relationship
+between two entities (the relation label may be a normalized form of what the
+text says); never invent a relationship the text does not state. If a salient
+entity has no stated relationship, emit it standalone with empty relation/tail
+({"head": "<entity>", "relation": "", "tail": ""}) so it becomes an isolated node.
+
+- **head**: the source entity
+- **relation**: the relationship type (grounded in the text)
+- **tail**: the target entity
 
 {{schema_constraints}}
 ```
+
+> **Grounding-only:** extraction does grounding and nothing else. Do not add
+> normalization, coreference, or connectivity instructions here — those are the
+> consolidate and augment stages. See `kg-domain-quality` Principle 1.
 
 > **Important:** Do NOT include output format instructions. The `langextract` framework generates format instructions from examples. You can include `{{schema_constraints}}` to inject entity/relation type guidance.
 
@@ -153,10 +166,17 @@ Only extract entities and relations that match the provided schema types.
 ### Augmentation Prompt (`augmentation/connectivity/prompt.md`)
 
 ```markdown
-You are a biomedical knowledge graph expert.
+You improve connectivity in a biomedical knowledge graph.
 
-Given the following text and a partially extracted knowledge graph with disconnected components,
-generate new triples that bridge the disconnected components.
+Add a bridging triple ONLY when the text supports a real relation between two
+entities that are currently in different components. It is BETTER to leave
+components disconnected than to invent a relation — a document holds several
+independent facts. Returning an empty array is a valid, common answer.
+
+Do NOT use vague fillers (related_to, associated_with, documented_in, has_finding)
+and do NOT attach entities to a generic hub node just to connect them. Respect
+direction (a part is located_in the whole, not reversed). Do not add synonymy
+edges — merging name variants is consolidation's job.
 
 ## Source Text
 {{text}}
@@ -169,9 +189,13 @@ generate new triples that bridge the disconnected components.
 
 {{schema_constraints}}
 
-Generate bridging triples as a JSON array. Each triple must have:
-- head, relation, tail, inference ("contextual"), justification
+Return a JSON array (possibly empty). Each triple: head, relation, tail,
+inference ("contextual"), justification grounded in the text.
 ```
+
+> Also set `max_disconnected` to a small number > 1 (e.g. 3), never 1 — forcing a
+> single component makes the model fabricate hub/filler edges. See
+> `kg-domain-quality` Principle 3 (measured: 34% → 4% noise).
 
 ### Augmentation Examples (`augmentation/connectivity/examples.json`)
 
@@ -179,24 +203,29 @@ Generate bridging triples as a JSON array. Each triple must have:
 [
   {
     "input": {
-      "text": "Aspirin treats headaches. Ibuprofen is an NSAID.",
+      "text": "Biopsy of the prostate showed adenocarcinoma. The prostate was firm on exam.",
       "components": [
-        {"entities": ["Aspirin", "headaches"]},
-        {"entities": ["Ibuprofen", "NSAID"]}
+        {"entities": ["biopsy", "adenocarcinoma"]},
+        {"entities": ["prostate"]}
       ]
     },
     "output": [
       {
-        "head": "Aspirin",
-        "relation": "is_a",
-        "tail": "NSAID",
+        "head": "adenocarcinoma",
+        "relation": "located_in",
+        "tail": "prostate",
         "inference": "contextual",
-        "justification": "Aspirin is also classified as an NSAID, bridging the two components."
+        "justification": "The biopsy of the prostate showed adenocarcinoma, so the carcinoma is located in the prostate."
       }
     ]
   }
 ]
 ```
+
+> The bridge above is **grounded** in the text ("biopsy of the prostate showed
+> adenocarcinoma"). Do NOT teach ungrounded taxonomy bridges (e.g. `X is_a Y`
+> when the text never says so) — that is the exact fabrication pattern
+> `kg-domain-quality` Principle 3 warns against.
 
 ## Step 2: Create Schema (Optional)
 
