@@ -106,11 +106,18 @@ def json_to_graphml(
         if tail not in G.nodes():
             G.add_node(tail)
 
-        # Build edge attributes
+        # Build edge attributes. Source provenance is added only when present
+        # (GraphML rejects None); its absence marks an inferred/augmented edge.
         edge_attrs = {
             "relation": t.relation,
-            "inference": t.inference.value
+            "inference": t.inference.value,
         }
+        if t.extraction_text:
+            edge_attrs["extraction_text"] = t.extraction_text
+        if t.char_start is not None:
+            edge_attrs["char_start"] = t.char_start
+        if t.char_end is not None:
+            edge_attrs["char_end"] = t.char_end
 
         G.add_edge(head, tail, **edge_attrs)
 

@@ -51,3 +51,19 @@ def test_graphml_routes_empty_relation_dicts_to_isolated_nodes():
         {"head": "TURBT", "relation": "", "tail": ""},
     ])
     assert "TURBT" in G.nodes() and G.degree("TURBT") == 0
+
+
+def test_provenance_offsets_remapped_to_document():
+    # langextract returns prompt-relative offsets; extract_triples must re-anchor
+    # to the source document via the exact span text.
+    doc = "The 75-year-old man had prostate adenocarcinoma."
+    client = StubClient([
+        {"head": "man", "relation": "has_age", "tail": "75",
+         "extraction_text": "75-year-old man", "char_start": 999, "char_end": 1014},  # bogus prompt offsets
+        {"head": "x", "relation": "rel", "tail": "y", "extraction_text": "not in the doc"},
+    ])
+    triples, _ = extract_triples(client, get_domain("default"), doc)
+    grounded = {t.head: t for t in triples}
+    m = grounded["man"]
+    assert doc[m.char_start:m.char_end] == "75-year-old man"   # re-anchored & exact
+    assert grounded["x"].char_start is None                     # span absent -> no offset

@@ -123,6 +123,15 @@ def extract_triples(
         head = str(t.get("head", "")).strip()
         relation = str(t.get("relation", "")).strip()
         tail = str(t.get("tail", "")).strip()
+        # langextract aligns spans against the rendered prompt (which embeds the
+        # document), so its offsets are prompt-relative. Re-anchor to the source
+        # document via the exact span text so the provenance is usable.
+        span = t.get("extraction_text")
+        if span:
+            pos = text.find(span)
+            t["char_start"], t["char_end"] = (pos, pos + len(span)) if pos >= 0 else (None, None)
+        else:
+            t["char_start"] = t["char_end"] = None
         # Grounding-only: a standalone entity (relation/tail absent because the
         # text states no relation for it) becomes an isolated node, never a
         # fabricated triple.

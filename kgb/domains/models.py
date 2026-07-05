@@ -39,6 +39,21 @@ class Triple(BaseModel):
         default=None,
         description="Brief explanation for 'contextual' triples (optional for explicit)."
     )
+    # Source provenance for grounded (extracted) triples. None for inferred /
+    # augmented triples — their absence is itself the signal that a triple was
+    # not read directly from the text.
+    extraction_text: Optional[str] = Field(
+        default=None,
+        description="The exact source span this triple was grounded to (None if inferred)."
+    )
+    char_start: Optional[int] = Field(
+        default=None,
+        description="Start offset of the source span in the document (None if inferred)."
+    )
+    char_end: Optional[int] = Field(
+        default=None,
+        description="End offset of the source span in the document (None if inferred)."
+    )
     
     @field_validator('head', 'relation', 'tail')
     @classmethod

@@ -166,7 +166,10 @@ def normalize_triple(raw_triple: dict[str, Any]) -> Triple | None:
             relation=raw_triple.get("relation", ""),
             tail=raw_triple.get("tail", ""),
             inference=raw_triple.get("inference", "explicit"),
-            justification=raw_triple.get("justification")
+            justification=raw_triple.get("justification"),
+            extraction_text=raw_triple.get("extraction_text"),
+            char_start=raw_triple.get("char_start"),
+            char_end=raw_triple.get("char_end"),
         )
     except Exception as e:
         print(f"Warning: Skipping invalid triple: {e}")
