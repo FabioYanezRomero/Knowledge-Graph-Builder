@@ -7,7 +7,8 @@ client:
   temperature: 0.0
   timeout: 300
   base_url: http://localhost:11434
-  workers: 3
+  workers: 1               # serialize: parallel local generations wedge the backend
+  think: false             # disable reasoning phase (faster, honored by the native provider)
 
 domain: legal
 mode: open
@@ -40,8 +41,9 @@ output_dir: outputs/pipeline_run_ollama
 #   - consolidate: {strategy: entity_resolution}
 steps:
   - extract
+  - consolidate            # entity_resolution: merge entity name variants (adds no triples)
   - augment:
-      max_disconnected: 1
+      max_disconnected: 3   # don't force one component; forcing it fabricates hub/filler edges
       max_iterations: 3
   - export-json
   - convert

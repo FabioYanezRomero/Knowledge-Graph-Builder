@@ -1,54 +1,53 @@
-You are an expert system for improving knowledge graph connectivity in legal case analysis.
+You improve connectivity in a legal-case knowledge graph.
 
-Context
-A knowledge graph has been extracted from a legal case background, but it contains disconnected components. Your primary goal is to CONNECT these components by finding missing relationships.
+Goal: add a bridging triple ONLY when the text actually supports a real relation
+between two entities that are currently in different components. It is BETTER to
+leave components disconnected than to invent a relation to connect them. A case
+background legitimately contains several independent facts (parties, instruments,
+events, holdings); not everything is related. Returning an EMPTY array is a valid,
+common answer.
 
-Objective
-Your priority is to reduce the number of disconnected components to the absolute minimum. 
-Extract ONLY bridging triples that connect entities from different components.
+Hard rules:
+- Only connect two entities if the text states or clearly implies a specific
+  relation between them. If it does not, leave them disconnected.
+- NEVER attach an entity to a generic hub node (e.g. "The Legal Case", "Financial
+  Framework", "Corporate Structure") just to reduce components. Anchoring
+  everything to an abstract hub carries no knowledge and is forbidden.
+- NEVER use vague fillers: `connected_to`, `involved_in`, `part_of_context`,
+  `subject_of`, `governed_by_context`, `related_to`, `associated_with`. If the
+  only relation you can justify is one of these, do not add the edge.
+- Do not add synonymy / "is-a-kind-of" edges — merging name variants is
+  consolidation's job, not yours.
+- Respect direction (a clause is part_of the contract, not the reverse) and do not
+  reverse specific/general.
+- Preserve negation and uncertainty. Do not invent holdings, obligations, or
+  findings the text does not state.
 
-Mandatory Labeling Rule
-For EVERY triple you extract in this step:
-1.  **Label it as `"inference": "contextual"`** by default.
-2.  **Provide a `"justification"`** explaining how this connection bridges the gap between components.
-3.  Only use `"inference": "explicit"` if the relationship is verbatim stated in the text and you simply missed it in the first pass.
+Prefer specific, grounded legal relations when the text supports them, e.g.:
+party_to, obligation_under, breach_of, governed_by, held_in (a ruling),
+appealed_to, party_in, secured_by, owed_to.
 
-Bridging Strategy (CRITICAL)
-If you cannot find an EXPLICIT relationship in the text that connects two components, you MUST INFER a logical relationship.
+For every triple:
+- use `"inference": "explicit"` if directly stated in the text
+- otherwise `"inference": "contextual"` (only for a genuinely implied relation)
+- include a short `"justification"` grounded in the text
 
-1. **Direct Connection**: Connect entities from Component A and Component B directly if a logical link exists.
-2. **Bridging Entities (Hub Nodes)**: If two components are only related through a broader concept, introduce an abstract "Bridging Entity" to act as a hub.
-   - Examples of Hub Nodes: `The Legal Case`, `Financial Framework`, `Corporate Structure`, `Contractual Obligations`, `Market Conditions`.
-   - Use these hubs to "anchor" multiple isolated components.
-   - Example: (Component A node, `involved_in`, `The Legal Case`) and (Component B node, `subject_of`, `The Legal Case`).
-
-Rules for Connectivity
-- Goal: Reach a single, connected component if possible.
-- Focus on connecting the largest or most isolated groups.
-- Use relationships like: `connected_to`, `involved_in`, `part_of_context`, `logical_precursor`, `subject_of`, `governed_by_context`.
-
-Output Format
-Return a JSON array of NEW triples only:
+Return ONLY a JSON array (may be EMPTY if no bridging relation is supported):
 [
   {
-    "head": "Entity A or Hub Node",
-    "relation": "connecting_relation",
-    "tail": "Entity B or Hub Node",
+    "head": "entity",
+    "relation": "relation",
+    "tail": "entity",
     "inference": "explicit | contextual",
-    "justification": "Why this hub or connection is logically necessary to unify the graph"
+    "justification": "short reason grounded in the text"
   }
 ]
-
-Remember:
-- Connectivity is the priority. Bridging the gap between isolated nodes is your main task.
-- Be aggressive with Hub Nodes if it helps unify the knowledge graph.
 
 {{schema_constraints}}
 
 Input Data:
-The following JSON contains:
-- "text": The original source text to analyze
-- "disconnected_components": Each component with its entities AND their triples (updated each iteration)
-- "current_triples": All triples extracted so far as JSON
+- "text": the original source text to analyze
+- "disconnected_components": each component with its entities AND their triples
+- "current_triples": all triples extracted so far as JSON
 
 {{record_json}}
