@@ -7,9 +7,10 @@ Extraction Guidelines:
 - Use exact text spans for extractions - do not paraphrase
 - Split complex phrases into smaller meaningful entities when appropriate
 - Focus ONLY on explicit information (not inferred relationships)
-- Ground EVERY salient entity as a node. Emit a triple ONLY when the relation is
-  named in the text — never fabricate one. If an entity has no stated relation,
-  emit it standalone with empty relation/tail:
+- Ground EVERY salient entity as a node. Emit a triple ONLY when the text states a
+  relationship between the two entities (the label may be a normalized form of
+  what the text says); never invent a relationship the text does not state. If an
+  entity has no stated relationship, emit it standalone with empty relation/tail:
   {"head": "<entity>", "relation": "", "tail": ""}. Never drop a mentioned party,
   court, statute, or instrument.
 

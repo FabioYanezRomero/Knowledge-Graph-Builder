@@ -29,10 +29,11 @@ Examples of resolution:
 
 ## Entity Completeness (grounding)
 Ground EVERY salient legal entity as a node. Emit a (head, relation, tail) triple
-ONLY when the relation is named in the text — never fabricate a relation
-(including type relations) that is not stated. If a party, court, statute, or
-instrument has no stated relation, emit it as a standalone node with empty
-relation/tail: {"head": "<entity>", "relation": "", "tail": ""}. Do not drop it.
+ONLY when the text states a relationship between the two entities (the label may
+be a normalized form of what the text says); never invent a relationship the text
+does not state. If a party, court, statute, or instrument has no stated
+relationship, emit it as a standalone node with empty relation/tail:
+{"head": "<entity>", "relation": "", "tail": ""}. Do not drop it.
 
 ## Guidelines
 - Normalize entity names consistently throughout extraction

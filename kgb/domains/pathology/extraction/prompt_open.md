@@ -10,7 +10,8 @@ Extract all clinically salient ENTITIES and the relationships among them, as tri
 Capture every salient entity (as a standalone node when the text states no
 relation for it — see Principle 0), and represent explicit findings, diagnoses,
 anatomical localization, biomarker status, grading, staging, procedures, and
-clinically meaningful pathological relationships that are named in the text.
+clinically meaningful pathological relationships that the text states (with
+concise normalized relation labels).
  
 # Domain Focus
 Focus specifically on:
@@ -26,25 +27,24 @@ Focus specifically on:
  
 # Extraction Principles
  
-## 0. Ground EVERY Salient Entity — but never fabricate a relation
+## 0. Ground EVERY Salient Entity — but never fabricate a relationship
 Every clinically salient entity mentioned in the text MUST appear. Missing a
 mentioned procedure, specimen, device, or finding is a grounding failure.
 
-Extract a (head, relation, tail) triple ONLY when the relation is explicitly
-NAMED in the text. Do NOT invent a relation — including type/category relations
-like "is_type" — that is not literally stated.
+Extract a (head, relation, tail) triple ONLY when the text actually states a
+relationship between the two entities — i.e. some words in the text link them
+(e.g. "carcinoma OF THE bladder" → located_in; "stage Ta Nx Mx" → has_stage).
+The relation LABEL may be a concise normalized form; it need not be the exact
+words. But never invent a relationship that no part of the text supports: if
+nothing in the text relates one entity to another, do NOT connect them.
 
-If a salient entity has NO relation stated in the text, emit it as a STANDALONE
-entity so it still becomes a node, using an EMPTY relation and tail:
+If a salient entity has NO relationship stated in the text, emit it as a
+STANDALONE entity so it still becomes a node, using an EMPTY relation and tail:
 
 {"head": "<entity>", "relation": "", "tail": ""}
 
-Examples of standalone entities (merely mentioned, no relation in the text):
-- {"head": "TURBT", "relation": "", "tail": ""}
-- {"head": "Foley catheter", "relation": "", "tail": ""}
-- {"head": "ciprofloxacin", "relation": "", "tail": ""}
-
-Never drop an entity, and never attach it with a made-up relation.
+Never drop an entity, and never attach it with a relationship the text does not
+state.
 
 ---
  
@@ -168,8 +168,8 @@ Use concise biomedical entity types where possible:
 - Include evidence spans exactly as written in the report.
 - Avoid duplicate triples.
 - Never drop a salient entity for lack of a relation — emit it as a standalone
-  entity with empty relation/tail (see Principle 0). Only relations named in the
-  text may appear as triples. Return an empty list ONLY if the text contains no
+  entity with empty relation/tail (see Principle 0). Only relationships the text
+  states may appear as triples. Return an empty list ONLY if the text contains no
   salient entities at all.
  
 ---
