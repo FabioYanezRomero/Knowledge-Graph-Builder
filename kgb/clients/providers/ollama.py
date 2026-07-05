@@ -163,6 +163,49 @@ def _repair_json_text(text: str) -> str:
     return salvaged if salvaged is not None else fixed
 
 
+def _coerce_scalar_values(text: str) -> str:
+    """Mirror langextract's resolver contract so one bad field can't abort a whole
+    document. langextract renders each extraction as
+    ``{"<Class>": <extraction_text>, "<Class>_attributes": {..triple..}}`` and its
+    resolver REQUIRES the ``*_attributes`` value to be a dict and every other value
+    to be a scalar (str/int/float) — raising, and dropping the entire document, on
+    a violation. Local models intermittently nest the extraction_text value; we
+    stringify ONLY those scalar-required fields and never touch the attributes
+    dicts (blindly stringifying those is what broke all 15 reports once)."""
+    import json
+    import re
+
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    body = m.group(1) if m else text
+    try:
+        parsed = json.loads(body)
+    except Exception:
+        return text
+    # Model may emit a bare list or a {"extractions": [...]} wrapper.
+    if isinstance(parsed, list):
+        items = parsed
+    elif isinstance(parsed, dict) and isinstance(parsed.get("extractions"), list):
+        items = parsed["extractions"]
+    else:
+        return text
+
+    changed = False
+    for obj in items:
+        if not isinstance(obj, dict):
+            continue
+        for k, v in list(obj.items()):
+            if k.endswith("_attributes"):
+                continue  # resolver requires a dict here — never touch
+            if not isinstance(v, (str, int, float, type(None))):
+                obj[k] = json.dumps(v, ensure_ascii=False)
+                changed = True
+    if not changed:
+        return text
+
+    dumped = json.dumps(parsed, ensure_ascii=False)
+    return f"```json\n{dumped}\n```" if m else dumped
+
+
 class OllamaExtractionModel(OllamaLanguageModel):
     """Native Ollama provider (/api/generate) for extraction.
 
@@ -183,7 +226,7 @@ class OllamaExtractionModel(OllamaLanguageModel):
         resp = super()._ollama_query(*args, **kwargs)
         if isinstance(resp, dict) and isinstance(resp.get("response"), str):
             resp = dict(resp)
-            resp["response"] = _repair_json_text(resp["response"])
+            resp["response"] = _coerce_scalar_values(_repair_json_text(resp["response"]))
         return resp
 
 

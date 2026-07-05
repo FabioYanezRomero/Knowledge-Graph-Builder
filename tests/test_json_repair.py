@@ -1,10 +1,50 @@
 """Hardened JSON repair for local-model extraction output."""
 import json
-from kgb.clients.providers.ollama import _repair_json_text
+import re
+from kgb.clients.providers.ollama import _repair_json_text, _coerce_scalar_values
 
 
 def _parse(s):
     return json.loads(_repair_json_text(s))
+
+
+def _fenced(s):
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", s)
+    return json.loads(m.group(1) if m else s)
+
+
+# langextract renders each extraction as {"Triple": <text>, "Triple_attributes": {..}}.
+# The resolver requires the *_attributes value to stay a dict and every other value
+# to be scalar; coercion must respect BOTH or it aborts the whole document.
+
+def test_attributes_dict_never_stringified():
+    # The regression that broke all 15 reports: don't touch *_attributes dicts.
+    raw = ('```json\n[{"Triple": "cystoscopy", "Triple_attributes": '
+           '{"head": "patient", "relation": "underwent", "tail": "cystoscopy"}}]\n```')
+    out = _coerce_scalar_values(raw)
+    obj = _fenced(out)[0]
+    assert isinstance(obj["Triple_attributes"], dict)   # still a dict, untouched
+    assert obj["Triple_attributes"]["relation"] == "underwent"
+
+
+def test_nonscalar_extraction_text_coerced():
+    # The report-07/10 failure: a nested value in the scalar-required field.
+    raw = '[{"Triple": {"nested": 1}, "Triple_attributes": {"head": "a"}}]'
+    obj = json.loads(_coerce_scalar_values(raw))[0]
+    assert isinstance(obj["Triple"], str)               # nested text -> string
+    assert isinstance(obj["Triple_attributes"], dict)   # attrs still a dict
+    assert json.loads(obj["Triple"]) == {"nested": 1}   # info preserved
+
+
+def test_all_scalar_unchanged():
+    raw = '[{"Triple": "x", "Triple_attributes": {"head": "a"}}]'
+    assert _coerce_scalar_values(raw) == raw            # no change -> identical text
+
+
+def test_list_extraction_text_coerced():
+    raw = '[{"Triple": ["a", "b"], "Triple_attributes": {"head": "a"}}]'
+    obj = json.loads(_coerce_scalar_values(raw))[0]
+    assert obj["Triple"] == '["a", "b"]'
 
 
 def test_clean_json_untouched():
