@@ -163,6 +163,38 @@ def _repair_json_text(text: str) -> str:
     return salvaged if salvaged is not None else fixed
 
 
+def _coerce_scalar_values(text: str) -> str:
+    """langextract's resolver rejects the WHOLE document if any field value is
+    non-scalar (a dict/list). Local models occasionally nest a value (e.g.
+    ``"tail": {"gleason": 7}``); stringify those so one bad field doesn't abort
+    the extraction. Preserves the fence if the input had one."""
+    import json
+    import re
+
+    m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+    body = m.group(1) if m else text
+    try:
+        data = json.loads(body)
+    except Exception:
+        return text
+    if not isinstance(data, list):
+        return text
+
+    changed = False
+    for obj in data:
+        if not isinstance(obj, dict):
+            continue
+        for k, v in list(obj.items()):
+            if not isinstance(v, (str, int, float, type(None))):
+                obj[k] = json.dumps(v, ensure_ascii=False)
+                changed = True
+    if not changed:
+        return text
+
+    dumped = json.dumps(data, ensure_ascii=False)
+    return f"```json\n{dumped}\n```" if m else dumped
+
+
 class OllamaExtractionModel(OllamaLanguageModel):
     """Native Ollama provider (/api/generate) for extraction.
 
@@ -183,7 +215,7 @@ class OllamaExtractionModel(OllamaLanguageModel):
         resp = super()._ollama_query(*args, **kwargs)
         if isinstance(resp, dict) and isinstance(resp.get("response"), str):
             resp = dict(resp)
-            resp["response"] = _repair_json_text(resp["response"])
+            resp["response"] = _coerce_scalar_values(_repair_json_text(resp["response"]))
         return resp
 
 
