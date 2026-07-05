@@ -44,6 +44,7 @@ class ClientConfig:
     # Ollama generation controls (ignored by other providers)
     think: bool | None = None       # False disables the model's "thinking" phase
     options: dict | None = None     # extra Ollama options: num_ctx, top_p, num_predict, ...
+    reset_every: int | None = None  # unload the model every N extractions (low-parallelism wedge guard)
 
 
 __all__ = ["ClientConfig", "ClientType"]

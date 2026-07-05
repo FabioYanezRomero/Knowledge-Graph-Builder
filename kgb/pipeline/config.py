@@ -112,6 +112,7 @@ def build_pipeline_from_config(
         max_workers = int(max_workers)
     think = _resolve(client_section, "think", "think")
     options = _resolve(client_section, "options", "options")
+    reset_every = _resolve(client_section, "reset_every", "reset_every")
     no_progress = _resolve(None, "", "no_progress", False)
 
     default_client_vals: dict[str, Any] = {
@@ -124,6 +125,7 @@ def build_pipeline_from_config(
         "workers": max_workers,
         "think": think,
         "options": options,
+        "reset_every": reset_every,
     }
 
     # Identical client configs (default or per-step) share one instance.
@@ -150,6 +152,8 @@ def build_pipeline_from_config(
                 ck["think"] = bool(vals["think"])
             if vals.get("options"):
                 ck["options"] = dict(vals["options"])
+            if vals.get("reset_every"):
+                ck["reset_every"] = int(vals["reset_every"])
             client_cache[key] = ClientFactory.create(ClientConfig(**ck))
         return client_cache[key]
 

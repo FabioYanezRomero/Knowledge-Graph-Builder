@@ -1,3 +1,4 @@
+import time
 from typing import TYPE_CHECKING, Any
 import requests
 import langextract as lx
@@ -11,15 +12,39 @@ if TYPE_CHECKING:
     from ..config import ClientConfig
 
 
+# Local backends (Ollama/MLX) wedge after sustained generation — the server stops
+# responding (read timeout) or returns 5xx. Unloading the model (keep_alive:0)
+# evicts it so the next request reloads a clean copy, which clears the wedge.
+_MAX_RESET_RETRIES = 2      # wedge-recovery attempts before giving up
+_RESET_COOLDOWN = 1.0       # seconds to let the server settle after an unload
+
+
+def _unload_ollama(real, url: str, model: str | None, timeout: int | None) -> None:
+    """Free a wedged model by unloading it (keep_alive:0). Best-effort."""
+    if not model:
+        return
+    try:
+        real.post(url, json={"model": model, "keep_alive": 0}, timeout=timeout)
+    except Exception:
+        pass
+    time.sleep(_RESET_COOLDOWN)
+
+
+def _is_wedged(resp) -> bool:
+    """A 5xx from Ollama means the server (not the request) failed — retryable."""
+    return getattr(resp, "status_code", 200) >= 500
+
+
 class _ThinkInjectingRequests:
     """Wraps the ``requests`` module so Ollama ``/api/generate`` calls carry a
-    top-level ``think`` flag (and extra options).
+    top-level ``think`` flag (and extra options), and recover from wedges.
 
-    This is the ONLY reliable way to disable gemma-style reasoning on Ollama:
-    the OpenAI-compatible endpoint ignores ``think`` entirely, and the native
-    endpoint ignores it inside ``options`` — it must sit at the request-body top
-    level, which langextract's native provider doesn't expose. The provider
-    reads its HTTP client from ``self._requests``, so we swap in this shim.
+    Injecting ``think`` at the request-body top level is the ONLY reliable way to
+    disable gemma-style reasoning on Ollama: the OpenAI-compatible endpoint
+    ignores ``think`` entirely, and the native endpoint ignores it inside
+    ``options``. The provider reads its HTTP client from ``self._requests``, so we
+    swap in this shim — which also makes it the single seam through which every
+    native extraction call flows, so wedge recovery lives here too.
     """
 
     def __init__(self, real, think: bool | None, options: dict | None):
@@ -29,12 +54,30 @@ class _ThinkInjectingRequests:
 
     def post(self, url, *args, **kwargs):
         payload = kwargs.get("json")
+        model = None
         if isinstance(payload, dict):
             if self._think is not None:
                 payload["think"] = self._think
             if self._options:
                 payload.setdefault("options", {}).update(self._options)
-        return self._real.post(url, *args, **kwargs)
+            model = payload.get("model")
+        timeout = kwargs.get("timeout")
+
+        last_exc: Exception | None = None
+        for attempt in range(_MAX_RESET_RETRIES + 1):
+            try:
+                resp = self._real.post(url, *args, **kwargs)
+            except self._real.exceptions.RequestException as e:
+                last_exc = e
+                if attempt < _MAX_RESET_RETRIES:
+                    _unload_ollama(self._real, url, model, timeout)
+                    continue
+                raise
+            if _is_wedged(resp) and attempt < _MAX_RESET_RETRIES:
+                _unload_ollama(self._real, url, model, timeout)
+                continue
+            return resp
+        raise last_exc  # unreachable: loop either returns or raises
 
     def __getattr__(self, name):  # forward .exceptions and anything else
         return getattr(self._real, name)
@@ -132,8 +175,9 @@ class OllamaExtractionModel(OllamaLanguageModel):
 
     def __init__(self, *args, think: bool | None = None, model_options: dict | None = None, **kwargs):
         super().__init__(*args, **kwargs)
-        if think is not None or model_options:
-            self._requests = _ThinkInjectingRequests(requests, think, dict(model_options or {}))
+        # Always install the shim: besides injecting think/options, it carries the
+        # wedge-recovery retry that keeps sustained extraction from hanging.
+        self._requests = _ThinkInjectingRequests(requests, think, dict(model_options or {}))
 
     def _ollama_query(self, *args, **kwargs):
         resp = super()._ollama_query(*args, **kwargs)
@@ -162,6 +206,7 @@ class OllamaClient(BaseLLMClient):
         timeout: int = 120,
         think: bool | None = None,
         options: dict | None = None,
+        reset_every: int | None = None,
     ) -> None:
         """Initialize Ollama client.
 
@@ -175,6 +220,9 @@ class OllamaClient(BaseLLMClient):
             timeout: Request timeout in seconds
             think: False disables the model's "thinking" phase (faster, more stable)
             options: Extra Ollama generation options (num_ctx, top_p, num_predict, ...)
+            reset_every: Proactively unload the model every N extractions. For
+                low-parallelism local backends that wedge under sustained load;
+                None disables it (retry-with-reset still recovers on failure).
         """
         _defaults = load_provider_defaults("ollama")
         self.model_id = model_id or _defaults["model_id"]
@@ -186,6 +234,8 @@ class OllamaClient(BaseLLMClient):
         self.timeout = timeout
         self.think = think
         self.options = options
+        self.reset_every = reset_every
+        self._extract_calls = 0  # ponytail: racy under workers>1, but this is a best-effort heuristic reset, not correctness
 
     def extract(
         self,
@@ -295,10 +345,18 @@ class OllamaClient(BaseLLMClient):
                         if all(k in triple for k in ('head', 'relation', 'tail')):
                             triples.append(triple)
 
+            self._maybe_reset()
             return triples
 
         except Exception as e:
             raise LLMClientError(f"Ollama extraction failed: {e}") from e
+
+    def _maybe_reset(self) -> None:
+        """Unload the model every ``reset_every`` extractions so a low-parallelism
+        local backend doesn't wedge under sustained load."""
+        self._extract_calls += 1
+        if self.reset_every and self._extract_calls % self.reset_every == 0:
+            _unload_ollama(requests, f"{self.base_url}/api/generate", self.model_id, self.timeout)
 
     def augment(
         self,
@@ -360,11 +418,25 @@ Each object MUST have at minimum: "head", "relation", "tail" fields."""
             }
             if self.think is not None:
                 payload["think"] = self.think  # top-level for /api/generate
-            response = requests.post(
-                f"{self.base_url}/api/generate",
-                json=payload,
-                timeout=self.timeout
-            )
+            url = f"{self.base_url}/api/generate"
+            # Same wedge-recovery as extraction: unload + retry on timeout/5xx.
+            last_exc: Exception | None = None
+            response = None
+            for attempt in range(_MAX_RESET_RETRIES + 1):
+                try:
+                    response = requests.post(url, json=payload, timeout=self.timeout)
+                except requests.exceptions.RequestException as e:
+                    last_exc = e
+                    if attempt < _MAX_RESET_RETRIES:
+                        _unload_ollama(requests, url, self.model_id, self.timeout)
+                        continue
+                    raise
+                if _is_wedged(response) and attempt < _MAX_RESET_RETRIES:
+                    _unload_ollama(requests, url, self.model_id, self.timeout)
+                    continue
+                break
+            if response is None:  # unreachable: loop returns or raises
+                raise last_exc
             response.raise_for_status()
 
             result = response.json()
@@ -442,6 +514,7 @@ Each object MUST have at minimum: "head", "relation", "tail" fields."""
             timeout=config.timeout,
             think=config.think,
             options=config.options,
+            reset_every=config.reset_every,
         )
 
 
