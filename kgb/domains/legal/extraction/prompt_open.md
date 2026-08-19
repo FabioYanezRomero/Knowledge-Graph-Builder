@@ -14,19 +14,6 @@ Each triple should contain:
 - tail: Object entity
 - inference: "explicit" if directly stated, "contextual" if reasonably implied
 
-## Coreference Resolution Guidelines
-IMPORTANT: Resolve all pronouns and references to their full entity names:
-- "he/she/they" → resolve to the person's name or role
-- "the court" → resolve to specific court name (e.g., "UK Supreme Court")
-- "the appellant/respondent" → resolve to the actual party name if mentioned
-- "it" → resolve to the organization or entity being referenced
-- "this case" → resolve to the case identifier if available
-
-Examples of resolution:
-- "She appealed the decision" → "Jane Smith appealed the decision" (if Jane Smith was mentioned)
-- "The court ruled..." → "Court of Appeal ruled..." (if that court was handling the case)
-- "He was convicted" → "Mr Norris was convicted" (using the named party)
-
 ## Entity Completeness (grounding)
 Ground EVERY salient legal entity as a node. Emit a (head, relation, tail) triple
 ONLY when the text states a relationship between the two entities (the label may
@@ -36,7 +23,6 @@ relationship, emit it as a standalone node with empty relation/tail:
 {"head": "<entity>", "relation": "", "tail": ""}. Do not drop it.
 
 ## Guidelines
-- Normalize entity names consistently throughout extraction
 - Use concise, descriptive relation labels
 - Split complex statements into atomic triples
 - Focus on legally meaningful relationships
