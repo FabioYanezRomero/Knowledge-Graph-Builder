@@ -53,6 +53,24 @@ def test_graphml_routes_empty_relation_dicts_to_isolated_nodes():
     assert "TURBT" in G.nodes() and G.degree("TURBT") == 0
 
 
+def test_triple_model_accepts_the_standalone_shape():
+    # The model must admit what the pipeline actually produces, or `kgb domain
+    # lint` rejects a domain whose examples are correct (pathology's did).
+    from kgb.domains import Triple
+    t = Triple(head="TURBT", relation="", tail="")
+    assert (t.head, t.relation, t.tail) == ("TURBT", "", "")
+
+
+def test_triple_model_rejects_half_a_relation():
+    import pytest
+    from kgb.domains import Triple
+    for bad in ({"head": "a", "relation": "does", "tail": ""},
+                {"head": "a", "relation": "", "tail": "b"},
+                {"head": "", "relation": "", "tail": ""}):
+        with pytest.raises(Exception):
+            Triple(**bad)
+
+
 def test_provenance_offsets_remapped_to_document():
     # langextract returns prompt-relative offsets; extract_triples must re-anchor
     # to the source document via the exact span text.

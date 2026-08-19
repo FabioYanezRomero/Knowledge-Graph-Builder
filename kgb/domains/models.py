@@ -5,7 +5,7 @@ from __future__ import annotations
 from enum import Enum
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
 
 class ExtractionMode(str, Enum):
@@ -24,7 +24,13 @@ class Triple(BaseModel):
     """A single knowledge graph triple (head, relation, tail).
     
     This is the core data structure for representing relationships in the knowledge graph.
-    All triples must have non-empty head, relation, and tail values.
+
+    Two valid shapes, and only two:
+      - a relation: head, relation and tail all non-empty;
+      - a standalone entity: head only, with relation and tail both empty — an
+        entity the text mentions without stating any relationship for it, carried
+        through the pipeline as an isolated graph node. Grounding-only extraction
+        emits these instead of inventing a relation to connect a lonely entity.
     """
     model_config = ConfigDict(frozen=True)
     
@@ -55,12 +61,29 @@ class Triple(BaseModel):
         description="End offset of the source span in the document (None if inferred)."
     )
     
-    @field_validator('head', 'relation', 'tail')
+    @field_validator('head')
     @classmethod
-    def must_not_be_empty(cls, v: str, info) -> str:
+    def head_must_not_be_empty(cls, v: str, info) -> str:
         if not v or not v.strip():
             raise ValueError(f"{info.field_name} cannot be empty")
         return v.strip()
+
+    @field_validator('relation', 'tail')
+    @classmethod
+    def strip_whitespace(cls, v: str) -> str:
+        return v.strip() if v else v
+
+    @model_validator(mode='after')
+    def relation_and_tail_travel_together(self) -> 'Triple':
+        # Half a relation is a malformed triple, not a standalone entity: the
+        # standalone shape is head alone. Rejecting the half-formed case keeps
+        # "no relation stated" distinguishable from "the model dropped a field".
+        if bool(self.relation) != bool(self.tail):
+            raise ValueError(
+                "relation and tail must both be present (a relation) or both be "
+                "empty (a standalone entity)"
+            )
+        return self
 
 
 class Extraction(BaseModel):
