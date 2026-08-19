@@ -12,3 +12,4 @@ __pycache__
 *_log_*
 post*.md
 reports/
+.DS_Store
