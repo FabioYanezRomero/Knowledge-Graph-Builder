@@ -5,8 +5,8 @@ A modular system for extracting knowledge graphs from text using multiple LLM ba
 ## Features
 
 - **Multi-Backend LLM Support** — Gemini API (cloud), Ollama (local), LM Studio (local)
-- **Knowledge Graph Extraction** — Structured triples (head-relation-tail) with source grounding via [langextract](https://github.com/langextract/langextract)
-- **Graph Consolidation** — Merge/clean operations that add no knowledge (entity resolution), runnable after extraction or augmentation
+- **Knowledge Graph Extraction** — Structured triples (head-relation-tail) with source grounding via [langextract](https://github.com/langextract/langextract); entities with no stated relation are kept as isolated nodes rather than fabricated edges
+- **Graph Consolidation** — Merge/clean operations that add no knowledge (entity and relation resolution), layered so that fuzzy matching proposes and deterministic guards decide
 - **Graph Augmentation** — Strategies that add new contextual triples (connectivity bridging)
 - **Origin Tracking** — Every triple tagged as `explicit` (extracted) or `contextual` (augmented)
 - **Interactive Visualizations** — Cytoscape.js interactive network graphs with node dragging, search/filter, and context menus; entity text highlighting
@@ -63,18 +63,33 @@ bash scripts/test_single_extraction_gemini.sh
 
 ## Pipeline Steps
 
-The typical workflow follows four steps:
+```
+Text → Extract → Consolidate → Augment → Convert → Visualize
+         ↓            ↓            ↓         ↓          ↓
+       JSON      JSON (merged)   JSON+    GraphML     HTML
+     (explicit)  (adds nothing) (contextual)
+```
 
-```
-Text → Extract → Augment → Convert → Visualize
-         ↓          ↓          ↓          ↓
-       JSON      JSON+      GraphML     HTML
-     (explicit) (contextual)
-```
+Each LLM stage has **one** job, and its prompt must not do another stage's:
+
+| Stage | Job | Must never |
+|---|---|---|
+| `extract` | ground what the text states | invent a relation to connect a lonely entity |
+| `consolidate` | merge name variants | add knowledge or introduce a new entity |
+| `augment` | add contextual edges | merge entities, or fabricate to force connectivity |
+
+Overloading one stage with another's job is the most expensive bug class in this
+project — it cost 34–89% noisy edges before it was found. **Read
+[BEST_PRACTICES.md](BEST_PRACTICES.md) before writing prompts for a new domain.**
 
 ### Step 1: Extract Triples
 
-Extracts source-grounded triples using langextract. Each triple has character positions in the original text.
+Extracts source-grounded triples using langextract. Each triple carries the exact
+source span (`extraction_text`) and its character offsets in the original text.
+
+A salient entity with **no relation stated in the text** is emitted as a
+standalone entity and becomes an isolated node — extraction never invents a
+relation just to connect it.
 
 ```bash
 kgb extract \
@@ -84,7 +99,26 @@ kgb extract \
   --output-dir outputs/run
 ```
 
-### Step 2: Augment Connectivity
+### Step 2: Consolidate (merge variants, add no knowledge)
+
+Merges surface variants of the same entity (`"Salvino"`, `"Defendant Salvino"` →
+`"Michael J. Salvino"`). Layered so that no single fallible component makes an
+irreversible merge: deterministic sieves → fuzzy *candidates* → LLM judgment →
+deterministic veto + closed-set guard. A canonical name that does not already
+exist in the graph is rejected.
+
+```bash
+kgb consolidate entity_resolution \
+  --input data/legal/legal_background.jsonl \
+  --domain legal \
+  --client gemini \
+  --output-dir outputs/run
+```
+
+`relation_resolution` (normalizing relation labels) is currently available
+through the YAML pipeline only.
+
+### Step 3: Augment Connectivity
 
 Generates bridging triples (tagged `contextual`) to connect disconnected graph components.
 
@@ -94,17 +128,23 @@ kgb augment connectivity \
   --domain legal \
   --client gemini \
   --output-dir outputs/run \
-  --max-disconnected 1 \
-  --max-iterations 5
+  --max-disconnected 3 \
+  --max-iterations 3
 ```
 
-### Step 3: Convert to GraphML
+> **Do not set `--max-disconnected 1`.** A document holds several independent
+> facts; forcing one connected component leaves the model no legal move except
+> to invent hub/filler edges. Measured cost of forcing it: 34% noisy edges in
+> pathology, 89% in legal. Leaving a graph honestly fragmented is the correct
+> outcome.
+
+### Step 4: Convert to GraphML
 
 ```bash
 kgb convert --input outputs/run/extracted_json --output outputs/run/graphml
 ```
 
-### Step 4: Visualize
+### Step 5: Visualize
 
 ```bash
 # Network topology (nodes colored by origin: Extracted/Augmented/Both)
@@ -204,23 +244,40 @@ test_outputs/single_extraction_20260318_101048/
 [
   {
     "head": "Sigma Finance Corporation",
-    "relation": "is a type of",
-    "tail": "structured investment vehicle (SIV)",
+    "relation": "entered",
+    "tail": "receivership",
     "inference": "explicit",
-    "justification": null
+    "justification": null,
+    "extraction_text": "Sigma Finance Corporation entered receivership",
+    "char_start": 1240,
+    "char_end": 1286
   },
   {
     "head": "financial markets",
     "relation": "impacted",
     "tail": "Sigma Finance Corporation",
     "inference": "contextual",
-    "justification": "The text states the impact on financial markets..."
+    "justification": "The text states the impact on financial markets...",
+    "extraction_text": null,
+    "char_start": null,
+    "char_end": null
+  },
+  {
+    "head": "structured investment vehicle",
+    "relation": "",
+    "tail": ""
   }
 ]
 ```
 
 - `inference: "explicit"` — Directly extracted from text with source grounding
 - `inference: "contextual"` — Inferred during augmentation to bridge components
+- **Provenance is the trust signal.** A grounded triple carries `extraction_text`
+  and document offsets; `null` offsets mean the triple was inferred, not read.
+  Treat inferred triples as low-trust.
+- **Empty `relation`/`tail` is a standalone entity**, not a broken triple — an
+  entity the text mentions without relating to anything. It becomes an isolated
+  node in the GraphML.
 
 ---
 
@@ -231,7 +288,12 @@ kgb/
 ├── __main__.py              # Typer CLI + interactive REPL
 ├── builder/                 # Graph construction logic
 │   ├── extraction.py        # Triple extraction (uses langextract)
-│   ├── augmentation.py      # Strategy registry + connectivity strategy
+│   ├── strategies.py        # Strategy registry (@register_strategy, augment/consolidate)
+│   ├── augmentation.py      # connectivity strategy (adds triples)
+│   ├── consolidation/       # Merge/clean strategies (add no triples)
+│   │   ├── entity_resolution.py
+│   │   ├── relation_resolution.py
+│   │   └── layers/          # Reusable: sieves, schwartz_hearst, fuzzy, veto, guard
 │   └── validation.py        # Schema validation + prompt rendering
 ├── clients/                 # LLM client abstraction
 │   ├── base.py              # BaseLLMClient (extract + augment interface)
@@ -247,8 +309,11 @@ kgb/
 │   ├── base.py              # KnowledgeDomain + DomainComponent
 │   ├── registry.py          # @domain() decorator + registry
 │   ├── models.py            # Triple, InferenceType, DomainSchema
+│   ├── lint.py              # Domain validator (kgb domain lint)
 │   ├── default/             # Generic domain
-│   └── legal/               # Legal domain (prompts, examples, schema)
+│   ├── legal/               # Legal domain (prompts, examples, schema)
+│   └── pathology/           # Pathology/clinical domain (prompts, examples, schema)
+├── eval/                    # Offline consolidation benchmark (FP/FN, no LLM)
 ├── io/                      # Input/output handling
 │   ├── readers/             # JSONL, JSON, CSV loaders
 │   └── writers/             # GraphML converter
@@ -342,8 +407,12 @@ bridges = client.augment(text="...", prompt_description="...", format_type=Tripl
 
 ### Domain System
 
-A domain is just a **directory of resources** — no Python code required. Any
-directory with this layout is a valid domain:
+A domain is just a **directory of resources** — no Python code required. The
+mechanics are below; for what to actually *write* in those prompts, see
+[BEST_PRACTICES.md](BEST_PRACTICES.md) — it exists so a new domain doesn't repeat
+mistakes already paid for. Validate with `kgb domain lint <name|path>`.
+
+Any directory with this layout is a valid domain:
 
 ```
 my_usecase/
