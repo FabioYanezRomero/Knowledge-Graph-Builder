@@ -122,6 +122,10 @@ class GeminiClient(BaseLLMClient):
                 "extraction_passes": kwargs.get("extraction_passes", self.extraction_passes),
                 "show_progress": kwargs.get("show_progress", self.show_progress),
                 "use_schema_constraints": True,
+                # See the ollama provider: langextract's fuzzy aligner is
+                # quadratic on large chunks and its offsets are discarded by
+                # extract_triples anyway.
+                "resolver_params": {"enable_fuzzy_alignment": False},
             }
 
             # Add max_tokens if specified
@@ -311,6 +315,10 @@ Input Text:
                 "extraction_passes": kwargs.get("extraction_passes", self.extraction_passes),
                 "show_progress": kwargs.get("show_progress", self.show_progress),
                 "use_schema_constraints": True,
+                # See the ollama provider: langextract's fuzzy aligner is
+                # quadratic on large chunks and its offsets are discarded by
+                # extract_triples anyway.
+                "resolver_params": {"enable_fuzzy_alignment": False},
             }
 
             return lx.extract(**lx_kwargs)

@@ -47,6 +47,38 @@ def test_list_extraction_text_coerced():
     assert obj["Triple"] == '["a", "b"]'
 
 
+# Shapes captured verbatim from gemma4:e4b on one 60K legal document. Each one
+# aborted the whole document before these were handled — langextract wants a LIST
+# of extractions and the model kept inventing other containers.
+
+def test_model_wrapper_key_normalized():
+    # The model wrapped the list under its own name instead of "extractions".
+    raw = ('{"triples": [{"Triple": "A does B", '
+           '"Triple_attributes": {"head": "A", "relation": "does", "tail": "B"}}]}')
+    out = json.loads(_coerce_scalar_values(raw))
+    assert out["extractions"][0]["Triple"] == "A does B"
+    assert isinstance(out["extractions"][0]["Triple_attributes"], dict)
+
+
+def test_lone_flat_extraction_wrapped_in_list():
+    raw = '{"Triple": "A does B", "Triple_attributes": {"head": "A"}}'
+    out = json.loads(_coerce_scalar_values(raw))
+    assert len(out["extractions"]) == 1
+    assert out["extractions"][0]["Triple"] == "A does B"
+
+
+def test_duplicate_keys_split_into_separate_extractions():
+    # The one that killed the document: three extractions crammed into one flat
+    # object via repeated keys. Plain json.loads keeps only the last, and the
+    # collapsed repeats reach langextract as a list -> ValueError -> document lost.
+    raw = ('{"Triple": "A does B", "Triple_attributes": {"head": "A"},'
+           ' "Triple": "C does D", "Triple_attributes": {"head": "C"},'
+           ' "Triple": "E does F", "Triple_attributes": {"head": "E"}}')
+    out = json.loads(_coerce_scalar_values(raw))
+    assert [e["Triple"] for e in out["extractions"]] == ["A does B", "C does D", "E does F"]
+    assert [e["Triple_attributes"]["head"] for e in out["extractions"]] == ["A", "C", "E"]
+
+
 def test_clean_json_untouched():
     s = '[{"head": "a", "relation": "r", "tail": "b"}]'
     assert json.loads(_repair_json_text(s)) == [{"head": "a", "relation": "r", "tail": "b"}]

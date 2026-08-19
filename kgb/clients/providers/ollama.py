@@ -163,33 +163,97 @@ def _repair_json_text(text: str) -> str:
     return salvaged if salvaged is not None else fixed
 
 
+def _pairs_hook(pairs: list[tuple[str, object]]):
+    """json.loads hook that preserves duplicate keys instead of last-wins.
+
+    A model that emits ``{"Triple": .., "Triple_attributes": {..}, "Triple": ..}``
+    is writing several extractions into one flat object. Plain ``json.loads``
+    silently keeps only the last; something downstream then collapses the repeats
+    into a list value and langextract drops the whole document. Keeping the pairs
+    lets us split them back into one object per extraction.
+    """
+    keys = [k for k, _ in pairs]
+    return pairs if len(keys) != len(set(keys)) else dict(pairs)
+
+
+def _pairs_to_items(pairs: list[tuple[str, object]]) -> list[dict]:
+    """Split flat ``Class``/``Class_attributes`` pairs into one object each."""
+    items: list[dict] = []
+    current: dict = {}
+    for k, v in pairs:
+        if k in current:  # a repeated key starts the next extraction
+            items.append(current)
+            current = {}
+        current[k] = v
+    if current:
+        items.append(current)
+    return items
+
+
+def _extraction_items(parsed) -> tuple[list | None, bool]:
+    """Normalize whatever the model emitted to a list of extraction objects.
+
+    Returns (items, rewrapped) — ``rewrapped`` is True when the shape itself had
+    to be repaired, so the caller knows to re-emit rather than pass the original
+    text through. Returns (None, False) for shapes we don't recognise, which are
+    left untouched for langextract to reject as before.
+
+    Shapes observed from local models on a single document:
+      1. ``[{...}, {...}]``                      — bare list (already fine)
+      2. ``{"extractions": [...]}``              — the canonical wrapper
+      3. ``{"triples": [...]}``                  — the model's own wrapper name
+      4. ``{"Triple": .., "Triple_attributes": {..}}``          — one flat object
+      5. the same with the pair repeated N times — N extractions in one object
+    """
+    # 5: duplicate keys survived as pairs (see _pairs_hook)
+    if isinstance(parsed, list) and parsed and isinstance(parsed[0], tuple):
+        return _pairs_to_items(parsed), True
+    # 1
+    if isinstance(parsed, list):
+        return parsed, False
+    if not isinstance(parsed, dict):
+        return None, False
+    # 2
+    if isinstance(parsed.get("extractions"), list):
+        return parsed["extractions"], False
+    # 4: a lone extraction, recognisable by its own attributes sibling
+    if any(f"{k}_attributes" in parsed for k in parsed):
+        return [parsed], True
+    # 3: some other wrapper name around the list
+    lists = [v for v in parsed.values() if isinstance(v, list)]
+    if len(lists) == 1:
+        return lists[0], True
+    return None, False
+
+
 def _coerce_scalar_values(text: str) -> str:
-    """Mirror langextract's resolver contract so one bad field can't abort a whole
-    document. langextract renders each extraction as
-    ``{"<Class>": <extraction_text>, "<Class>_attributes": {..triple..}}`` and its
-    resolver REQUIRES the ``*_attributes`` value to be a dict and every other value
-    to be a scalar (str/int/float) — raising, and dropping the entire document, on
-    a violation. Local models intermittently nest the extraction_text value; we
-    stringify ONLY those scalar-required fields and never touch the attributes
-    dicts (blindly stringifying those is what broke all 15 reports once)."""
+    """Mirror langextract's resolver contract so one bad response can't abort a
+    whole document. langextract renders each extraction as
+    ``{"<Class>": <extraction_text>, "<Class>_attributes": {..triple..}}``, expects
+    a LIST of those under an ``extractions`` key, and its resolver REQUIRES the
+    ``*_attributes`` value to be a dict and every other value to be a scalar
+    (str/int/float) — raising, and dropping the entire document, on a violation.
+
+    Local models violate this two ways: they wrap the list under their own key (or
+    omit the list entirely), and they nest the extraction_text value. We repair the
+    shape and stringify ONLY the scalar-required fields, never touching the
+    attributes dicts (blindly stringifying those is what broke all 15 reports once).
+    """
     import json
     import re
 
     m = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
     body = m.group(1) if m else text
     try:
-        parsed = json.loads(body)
+        parsed = json.loads(body, object_pairs_hook=_pairs_hook)
     except Exception:
         return text
-    # Model may emit a bare list or a {"extractions": [...]} wrapper.
-    if isinstance(parsed, list):
-        items = parsed
-    elif isinstance(parsed, dict) and isinstance(parsed.get("extractions"), list):
-        items = parsed["extractions"]
-    else:
+
+    items, rewrapped = _extraction_items(parsed)
+    if items is None:
         return text
 
-    changed = False
+    changed = rewrapped
     for obj in items:
         if not isinstance(obj, dict):
             continue
@@ -202,7 +266,9 @@ def _coerce_scalar_values(text: str) -> str:
     if not changed:
         return text
 
-    dumped = json.dumps(parsed, ensure_ascii=False)
+    # Only re-shape what was actually broken: a payload that merely needed a
+    # value stringified keeps its original container.
+    dumped = json.dumps({"extractions": items} if rewrapped else parsed, ensure_ascii=False)
     return f"```json\n{dumped}\n```" if m else dumped
 
 
@@ -328,11 +394,18 @@ class OllamaClient(BaseLLMClient):
                 "batch_length": self.batch_length,
                 "max_char_buffer": self.max_char_buffer,
                 "show_progress": self.show_progress,
-                "use_schema_constraints": False, 
+                "use_schema_constraints": False,
                 "fence_output": True,  # Expect JSON in code fences
                 "fetch_urls": False,
                 "resolver_params": {
                     "require_extractions_key": False,
+                    # langextract's fuzzy aligner is difflib.SequenceMatcher with
+                    # autojunk=False, which degrades to hours on chunks past ~16k
+                    # chars. We pay nothing to lose it: extract_triples discards
+                    # langextract's (prompt-relative) offsets and re-anchors each
+                    # span to the document by exact find, leaving None when it
+                    # doesn't match — an honest gap beats a fuzzy guess.
+                    "enable_fuzzy_alignment": False,
                 }
             }
 
@@ -513,7 +586,11 @@ Each object MUST have at minimum: "head", "relation", "tail" fields."""
                 response_text = json_match.group(1)
             
             try:
-                data = json.loads(response_text)
+                # Same hardening the extraction path gets: a response truncated
+                # mid-array (the usual symptom of a prompt that nearly fills
+                # num_ctx) salvages to its complete objects instead of raising
+                # and killing the run.
+                data = json.loads(_repair_json_text(response_text))
                 if isinstance(data, list):
                     items = data
                 elif isinstance(data, dict):

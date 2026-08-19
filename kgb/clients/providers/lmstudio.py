@@ -214,6 +214,10 @@ class LMStudioClient(BaseLLMClient):
                 "use_schema_constraints": False,  # LM Studio doesn't support JSON schema
                 "fence_output": True,  # Expect JSON in code fences
                 "fetch_urls": False,
+                # See the ollama provider: langextract's fuzzy aligner is
+                # quadratic on large chunks and its offsets are discarded by
+                # extract_triples anyway.
+                "resolver_params": {"enable_fuzzy_alignment": False},
             }
 
             if max_tokens:
