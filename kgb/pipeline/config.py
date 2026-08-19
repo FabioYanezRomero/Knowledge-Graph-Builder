@@ -110,6 +110,7 @@ def build_pipeline_from_config(
     max_workers = _resolve(client_section, "workers", "workers")
     if max_workers is not None:
         max_workers = int(max_workers)
+    max_char_buffer = _resolve(client_section, "max_char_buffer", "max_char_buffer")
     think = _resolve(client_section, "think", "think")
     options = _resolve(client_section, "options", "options")
     reset_every = _resolve(client_section, "reset_every", "reset_every")
@@ -123,6 +124,7 @@ def build_pipeline_from_config(
         "temperature": temperature,
         "timeout": timeout,
         "workers": max_workers,
+        "max_char_buffer": max_char_buffer,
         "think": think,
         "options": options,
         "reset_every": reset_every,
@@ -148,6 +150,8 @@ def build_pipeline_from_config(
                 ck["base_url"] = vals["base_url"]
             if vals.get("workers"):
                 ck["max_workers"] = int(vals["workers"])
+            if vals.get("max_char_buffer"):
+                ck["max_char_buffer"] = int(vals["max_char_buffer"])
             if vals.get("think") is not None:
                 ck["think"] = bool(vals["think"])
             if vals.get("options"):

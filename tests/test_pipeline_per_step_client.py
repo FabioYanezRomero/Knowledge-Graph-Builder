@@ -63,6 +63,20 @@ def test_identical_override_shares_default_client(tmp_path, created):
     assert runner.steps[0].client is runner.steps[1].client
 
 
+def test_max_char_buffer_from_yaml(tmp_path, created):
+    # The chunk-size knob must be settable per run (and per step) — it is the
+    # independent variable of the chunk-size/recall experiments.
+    raw = _base_config(tmp_path, [
+        "extract",
+        {"augment": {"client": {"max_char_buffer": 32000}}},
+    ])
+    raw["client"]["max_char_buffer"] = 3000
+    pipeline_config.build_pipeline_from_config(raw)
+
+    assert created[0].max_char_buffer == 3000
+    assert created[1].max_char_buffer == 32000
+
+
 def test_provider_switch_drops_provider_fields(tmp_path, created):
     raw = _base_config(tmp_path, ["extract"])
     raw["client"]["base_url"] = "http://localhost:11434"
