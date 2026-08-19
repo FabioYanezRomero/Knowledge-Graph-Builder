@@ -190,6 +190,62 @@ def _pairs_to_items(pairs: list[tuple[str, object]]) -> list[dict]:
     return items
 
 
+def _drop_unusable(items: list) -> tuple[list[dict], int]:
+    """Drop the individual extractions langextract's resolver refuses.
+
+    Enumerating malformed *containers* is whack-a-mole — every model breaks
+    differently (gemma4:12b emits non-mapping items, 26b emits empty extraction
+    text, e4b duplicated keys). So mirror the resolver's per-item contract
+    instead: an item it would raise on is dropped, and the document survives with
+    its other extractions rather than being lost whole.
+
+    The contract: each item is a mapping, and its non-attributes value (the
+    extraction text) is a non-empty scalar.
+    """
+    kept: list[dict] = []
+    dropped = 0
+    for obj in items:
+        if not isinstance(obj, dict):
+            dropped += 1  # "Each item in the sequence must be a mapping"
+            continue
+        texts = [v for k, v in obj.items() if not k.endswith("_attributes")]
+        if not texts or not any(str(v).strip() for v in texts if v is not None):
+            dropped += 1  # "Source tokens and extraction tokens cannot be empty"
+            continue
+        kept.append(obj)
+    return kept, dropped
+
+
+def _recover_escaped_payload(parsed: dict) -> list | None:
+    """Recover extractions the model escaped into a JSON string.
+
+    gemma4:26b double-encodes a whole response: several perfectly good
+    extractions end up inside ONE string used as an object key, with no value.
+    langextract then sees an extraction whose text is empty and raises, losing
+    the document — while the payload sitting inside that string was fine and
+    just needed unwrapping.
+    """
+    import json
+
+    candidates = list(parsed.keys()) + [v for v in parsed.values() if isinstance(v, str)]
+    for candidate in candidates:
+        if not isinstance(candidate, str) or "_attributes" not in candidate:
+            continue
+        # The fragment usually starts *inside* an object (its opening brace was
+        # the wrapper's), so try it both ways and salvage whatever parses.
+        for wrapped in ("{" + candidate, candidate):
+            salvaged = _salvage_json_objects(wrapped)
+            if not salvaged:
+                continue
+            try:
+                items = json.loads(salvaged)
+            except Exception:
+                continue
+            if isinstance(items, list) and items:
+                return items
+    return None
+
+
 def _extraction_items(parsed) -> tuple[list | None, bool]:
     """Normalize whatever the model emitted to a list of extraction objects.
 
@@ -223,6 +279,10 @@ def _extraction_items(parsed) -> tuple[list | None, bool]:
     lists = [v for v in parsed.values() if isinstance(v, list)]
     if len(lists) == 1:
         return lists[0], True
+    # 6: the whole answer escaped into a string
+    recovered = _recover_escaped_payload(parsed)
+    if recovered:
+        return recovered, True
     return None, False
 
 
@@ -251,7 +311,12 @@ def _coerce_scalar_values(text: str) -> str:
 
     items, rewrapped = _extraction_items(parsed)
     if items is None:
-        return text
+        # A shape we can neither read nor repair. Passing it through means
+        # langextract raises and the WHOLE document is lost; yielding nothing
+        # loses only this chunk. Loud, because it is still lost data.
+        print(f"  [Ollama] unrecognized response shape, dropping this chunk: {body[:120]!r}")
+        empty = '{"extractions": []}'
+        return f"```json\n{empty}\n```" if m else empty
 
     changed = rewrapped
     for obj in items:
@@ -263,6 +328,14 @@ def _coerce_scalar_values(text: str) -> str:
             if not isinstance(v, (str, int, float, type(None))):
                 obj[k] = json.dumps(v, ensure_ascii=False)
                 changed = True
+    items, dropped = _drop_unusable(items)
+    if dropped:
+        # Never silent: a dropped extraction is real data loss, just a much
+        # smaller loss than the whole document.
+        print(f"  [Ollama] dropped {dropped} unusable extraction(s) from this response")
+        changed = True
+        rewrapped = True  # the container must be rebuilt around the survivors
+
     if not changed:
         return text
 

@@ -79,6 +79,50 @@ def test_duplicate_keys_split_into_separate_extractions():
     assert [e["Triple_attributes"]["head"] for e in out["extractions"]] == ["A", "C", "E"]
 
 
+def test_non_mapping_items_dropped_not_fatal():
+    # gemma4:12b: "Each item in the sequence must be a mapping." One bad item
+    # used to abort the entire document.
+    raw = ('[{"Triple": "A does B", "Triple_attributes": {"head": "A"}},'
+           ' "a bare string", ["a", "nested", "list"]]')
+    out = json.loads(_coerce_scalar_values(raw))
+    assert [e["Triple"] for e in out["extractions"]] == ["A does B"]
+
+
+def test_empty_extraction_text_dropped_not_fatal():
+    # gemma4:26b: "Source tokens and extraction tokens cannot be empty."
+    raw = ('[{"Triple": "A does B", "Triple_attributes": {"head": "A"}},'
+           ' {"Triple": "   ", "Triple_attributes": {"head": "B"}},'
+           ' {"Triple": "", "Triple_attributes": {"head": "C"}}]')
+    out = json.loads(_coerce_scalar_values(raw))
+    assert [e["Triple"] for e in out["extractions"]] == ["A does B"]
+
+
+def test_all_items_unusable_yields_empty_not_crash():
+    raw = '["nope", {"Triple": "", "Triple_attributes": {}}]'
+    out = json.loads(_coerce_scalar_values(raw))
+    assert out["extractions"] == []
+
+
+def test_escaped_payload_recovered():
+    # gemma4:26b double-encoded a whole response: several good extractions ended
+    # up inside ONE string used as an object key, with no value. langextract saw
+    # an extraction with empty text and killed the document; the payload was fine.
+    # The real shape: {"<the whole escaped answer>": ""} — one key, empty value.
+    inner = ('  "Triple": "A does B",\n  "Triple_attributes": {"head": "A"}\n},\n'
+             '{\n  "Triple": "C does D",\n  "Triple_attributes": {"head": "C"}\n}')
+    raw = "{" + json.dumps(inner) + ': ""}'
+    out = json.loads(_coerce_scalar_values(raw))
+    assert [e["Triple"] for e in out["extractions"]] == ["A does B", "C does D"]
+    assert out["extractions"][0]["Triple_attributes"] == {"head": "A"}
+
+
+def test_unrecognized_shape_costs_the_chunk_not_the_document():
+    # {"text": ...} — the model echoing the input field instead of extracting.
+    # Unreadable and unrepairable, so it yields nothing rather than raising.
+    out = json.loads(_coerce_scalar_values('{"text": "128 S.Ct."}'))
+    assert out["extractions"] == []
+
+
 def test_clean_json_untouched():
     s = '[{"head": "a", "relation": "r", "tail": "b"}]'
     assert json.loads(_repair_json_text(s)) == [{"head": "a", "relation": "r", "tail": "b"}]
