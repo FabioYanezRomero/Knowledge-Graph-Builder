@@ -35,6 +35,31 @@ def _is_wedged(resp) -> bool:
     return getattr(resp, "status_code", 200) >= 500
 
 
+def _warn_if_prompt_crowds_ctx(payload: dict) -> None:
+    """Say so when the prompt leaves no room to answer.
+
+    Ollama truncates an over-long prompt SILENTLY — no error, no flag. That used
+    to surface as an obvious 1-char response; now that augment() salvages partial
+    output, a truncated prompt yields plausible-looking partial results instead,
+    so nothing tells you the model only saw part of its input.
+
+    This bites consolidation hardest: its prompt scales with the ENTITY COUNT
+    (~310 chars each here), not with the document, so a stronger model that finds
+    3x the entities silently outgrows a window that was ample for a weaker one.
+    """
+    num_ctx = (payload.get("options") or {}).get("num_ctx")
+    prompt = payload.get("prompt") or ""
+    if not num_ctx or not prompt:
+        return
+    approx_tokens = len(prompt) / 3.5
+    if approx_tokens > num_ctx * 0.85:
+        print(
+            f"  [Ollama] prompt is ~{int(approx_tokens):,} tokens against num_ctx "
+            f"{num_ctx:,} — Ollama truncates silently and the answer has little or "
+            f"no room. Raise num_ctx or send less at once."
+        )
+
+
 class _ThinkInjectingRequests:
     """Wraps the ``requests`` module so Ollama ``/api/generate`` calls carry a
     top-level ``think`` flag (and extra options), and recover from wedges.
@@ -61,6 +86,7 @@ class _ThinkInjectingRequests:
             if self._options:
                 payload.setdefault("options", {}).update(self._options)
             model = payload.get("model")
+            _warn_if_prompt_crowds_ctx(payload)
         timeout = kwargs.get("timeout")
 
         last_exc: Exception | None = None
