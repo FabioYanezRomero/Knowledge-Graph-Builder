@@ -35,29 +35,51 @@ def _is_wedged(resp) -> bool:
     return getattr(resp, "status_code", 200) >= 500
 
 
-def _warn_if_prompt_crowds_ctx(payload: dict) -> None:
-    """Say so when the prompt leaves no room to answer.
+_MAX_NUM_CTX = 131072
 
-    Ollama truncates an over-long prompt SILENTLY — no error, no flag. That used
-    to surface as an obvious 1-char response; now that augment() salvages partial
-    output, a truncated prompt yields plausible-looking partial results instead,
-    so nothing tells you the model only saw part of its input.
 
-    This bites consolidation hardest: its prompt scales with the ENTITY COUNT
-    (~310 chars each here), not with the document, so a stronger model that finds
-    3x the entities silently outgrows a window that was ample for a weaker one.
+def _fit_num_ctx(payload: dict) -> None:
+    """Grow ``num_ctx`` so the prompt fits, instead of letting Ollama truncate it.
+
+    Ollama truncates an over-long prompt SILENTLY — no error, no flag, no field in
+    the response. It used to show up as an obvious 1-char answer; now that we
+    salvage partial output it shows up as plausible-looking partial results, which
+    is worse. Nothing in the response says the model only saw half its input.
+
+    A configured num_ctx is a guess about prompt size, and the guess breaks the
+    moment either input grows. Consolidation is the sharp case: its prompt scales
+    with the ENTITY COUNT (~310 chars each on legal prose), not with the document,
+    so a stronger model that finds 3x the entities on the SAME document silently
+    outgrows a window that was ample for a weaker one — the config is identical
+    and the results quietly get worse.
+
+    So don't guess: size the window to the prompt actually being sent, here, at
+    the one seam every native call passes through. Only ever grows (a caller who
+    asked for more keeps it), and leaves ~15% headroom for the answer. Past the
+    cap we can only warn — but then the failure is at least loud.
     """
-    num_ctx = (payload.get("options") or {}).get("num_ctx")
     prompt = payload.get("prompt") or ""
-    if not num_ctx or not prompt:
+    if not prompt:
         return
-    approx_tokens = len(prompt) / 3.5
-    if approx_tokens > num_ctx * 0.85:
+    needed = int(len(prompt) / 3.5 / 0.85)  # ~3.5 chars/token, 15% left to answer
+    options = payload.setdefault("options", {})
+    current = options.get("num_ctx") or 0
+    if needed <= current:
+        return
+
+    fitted = max(current, 8192)
+    while fitted < needed and fitted < _MAX_NUM_CTX:
+        fitted *= 2
+    options["num_ctx"] = fitted
+    if fitted < needed:
         print(
-            f"  [Ollama] prompt is ~{int(approx_tokens):,} tokens against num_ctx "
-            f"{num_ctx:,} — Ollama truncates silently and the answer has little or "
-            f"no room. Raise num_ctx or send less at once."
+            f"  [Ollama] prompt is ~{int(len(prompt) / 3.5):,} tokens and does not fit "
+            f"even at num_ctx {fitted:,} — Ollama will truncate it silently. "
+            f"Send less at once (fewer entities per consolidation, smaller chunks)."
         )
+    elif current:
+        print(f"  [Ollama] raised num_ctx {current:,} -> {fitted:,} to fit a "
+              f"~{int(len(prompt) / 3.5):,}-token prompt")
 
 
 class _ThinkInjectingRequests:
@@ -86,7 +108,7 @@ class _ThinkInjectingRequests:
             if self._options:
                 payload.setdefault("options", {}).update(self._options)
             model = payload.get("model")
-            _warn_if_prompt_crowds_ctx(payload)
+            _fit_num_ctx(payload)
         timeout = kwargs.get("timeout")
 
         last_exc: Exception | None = None
@@ -637,6 +659,10 @@ Each object MUST have at minimum: "head", "relation", "tail" fields."""
             }
             if self.think is not None:
                 payload["think"] = self.think  # top-level for /api/generate
+            # augment() builds its own payload, so it misses the extraction shim.
+            # This is the path consolidation runs on — the one that was silently
+            # truncated — so it needs the fit at least as much.
+            _fit_num_ctx(payload)
             url = f"{self.base_url}/api/generate"
             # Same wedge-recovery as extraction: unload + retry on timeout/5xx.
             last_exc: Exception | None = None

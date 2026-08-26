@@ -98,17 +98,14 @@ def sweep(text: str, domain_name: str, client_type: str, model: str,
         before = _measure(triples, standalone)
 
         # Consolidation sends ONE prompt holding every entity and its edge
-        # context, so it scales with the ENTITY COUNT — measured at ~310 chars
-        # per entity here — not with the document or the chunk. Sizing it from
-        # the document is what silently truncated a 363-entity graph inside a
-        # window that was ample for the same document at 126 entities, because a
-        # stronger model finds 3x the entities. Size it from the graph we just
-        # extracted, and leave room for the answer.
-        er_ctx = _num_ctx_for(before["entities"] * 310)
-        consolidate_client = _client(er_ctx, len(text))
-
+        # context, so it scales with the ENTITY COUNT — not with the document or
+        # the chunk. Sizing it from the document is what silently truncated a
+        # 363-entity graph inside a window that was ample for the same document
+        # at 126 entities, because a stronger model finds 3x the entities. The
+        # client now fits num_ctx to each prompt it actually sends, so the same
+        # client is safe for both steps and this sweep has no window to guess.
         t0 = time.perf_counter()
-        resolved, meta = entity_resolution_strategy(consolidate_client, domain, text, triples)
+        resolved, meta = entity_resolution_strategy(client, domain, text, triples)
         consolidate_s = time.perf_counter() - t0
 
         after = _measure(resolved, standalone)
