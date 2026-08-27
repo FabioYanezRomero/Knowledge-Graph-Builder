@@ -1,4 +1,4 @@
 {
-  "model_id": "gemini-2.0-flash",
+  "model_id": "gemini-flash-latest",
   "max_workers": 10
 }

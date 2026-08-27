@@ -114,7 +114,7 @@ class ClientFactory:
         Examples:
             >>> client = ClientFactory.from_config(
             ...     client_type="gemini",
-            ...     model_id="gemini-2.0-flash",
+            ...     model_id="gemini-flash-latest",
             ...     api_key="your-key"
             ... )
         """

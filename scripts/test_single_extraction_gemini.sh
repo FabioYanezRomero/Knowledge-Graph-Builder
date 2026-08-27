@@ -18,7 +18,7 @@
 
 # Model Configuration
 MODEL_PROVIDER="gemini"  # Options: gemini, ollama, lmstudio
-MODEL_NAME="gemini-3-flash-preview"  # For gemini: gemini-2.0-flash, gemini-2.5-flash, etc.
+MODEL_NAME="gemini-3-flash-preview"  # For gemini: gemini-flash-latest, gemini-3.6-flash, etc.
 TEMPERATURE=0.0
 
 # Base directory detection (Docker vs local)

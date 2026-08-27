@@ -468,7 +468,7 @@ schema = domain.schema  # DomainSchema with entity_types, relation_types
 
 | Client | Type | Default Model | Setup |
 |--------|------|---------------|-------|
-| `gemini` | Cloud API | gemini-2.0-flash | Set `GOOGLE_API_KEY` in `.env` |
+| `gemini` | Cloud API | gemini-flash-latest | Set `GOOGLE_API_KEY` in `.env` |
 | `ollama` | Local | llama3.1 | `ollama serve` + `ollama pull <model>` |
 | `lmstudio` | Local | (loaded model) | Start LM Studio server on port 1234 |
 

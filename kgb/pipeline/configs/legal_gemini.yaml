@@ -3,7 +3,7 @@ description: Full pipeline for legal domain using Gemini API
 
 client:
   type: gemini
-  model: gemini-2.0-flash
+  model: gemini-flash-latest
   temperature: 0.0
   timeout: 120
 

@@ -18,6 +18,64 @@ if TYPE_CHECKING:
     from ..config import ClientConfig
 
 
+_CTX_HEADROOM = 0.85  # leave ~15% of the window for the answer
+
+
+def context_limit(base_url: str, model_id: str) -> int | None:
+    """Tokens LM Studio will actually accept, or None if we cannot find out.
+
+    Unlike Ollama, LM Studio takes no per-request context size: the window is
+    fixed when the model is loaded, and an over-long prompt is truncated by the
+    server according to its overflow policy — quietly, and the reply still looks
+    well-formed. So we cannot grow the window the way the ollama provider does;
+    the only defence is to read the window and refuse to send something that
+    won't fit.
+
+    Read via LM Studio's native REST API (``/api/v0/models``), which reports
+    ``loaded_context_length`` for the model currently in memory; the
+    OpenAI-compatible ``/v1/models`` does not expose it.
+    """
+    import requests
+
+    root = base_url.rstrip("/").removesuffix("/v1")
+    try:
+        entries = requests.get(f"{root}/api/v0/models", timeout=10).json()["data"]
+    except Exception:
+        return None  # a guard that breaks extraction is worse than no guard
+
+    match = next((e for e in entries if e.get("id") == model_id), None)
+    if match is None:
+        # The default model_id is the placeholder "local-model", and LM Studio
+        # serves whatever is loaded regardless of the id sent. Ask the model in
+        # memory, which is the one that will answer.
+        loaded = [e for e in entries if e.get("state") == "loaded"]
+        match = loaded[0] if len(loaded) == 1 else None
+    if match is None:
+        return None
+    return match.get("loaded_context_length") or match.get("max_context_length")
+
+
+def assert_prompt_fits(limit: int | None, prompt: str, what: str) -> None:
+    """Fail loudly rather than let LM Studio silently drop half the prompt.
+
+    This is a configuration problem, not a data problem: if the window is too
+    small it is too small for every chunk, so there is nothing to salvage by
+    continuing. Truncated-but-plausible output is the failure mode we most want
+    to avoid — it is indistinguishable from a model that just answered badly.
+    """
+    if not limit:
+        return
+    approx_tokens = len(prompt) / 3.5
+    if approx_tokens > limit * _CTX_HEADROOM:
+        raise LLMClientError(
+            f"LM Studio {what} prompt is ~{int(approx_tokens):,} tokens but the loaded "
+            f"model's context is {limit:,}. LM Studio would truncate it silently and "
+            f"return a plausible-looking partial answer. Raise the context length when "
+            f"loading the model, or send less at once (smaller --max-char-buffer for "
+            f"extraction, fewer entities per consolidation)."
+        )
+
+
 @dataclasses.dataclass(init=False)
 class LMStudioLanguageModel(OpenAILanguageModel):
     """Custom OpenAI-compatible model for LM Studio that doesn't use response_format.
@@ -39,12 +97,13 @@ class LMStudioLanguageModel(OpenAILanguageModel):
         temperature: float | None = None,
         max_workers: int = 5,
         timeout: int = 120,
+        context_limit: int | None = None,
         **kwargs,
     ) -> None:
         """Initialize LM Studio language model with JSON format type."""
         from langextract.core.data import FormatType
-        
-        # Initialize parent with JSON format type 
+
+        # Initialize parent with JSON format type
         super().__init__(
             model_id=model_id,
             api_key=api_key,
@@ -56,6 +115,7 @@ class LMStudioLanguageModel(OpenAILanguageModel):
             **kwargs,
         )
         self.timeout = timeout
+        self.context_limit = context_limit
 
     @property
     def requires_fence_output(self) -> bool:
@@ -66,6 +126,10 @@ class LMStudioLanguageModel(OpenAILanguageModel):
         self, prompt: str, config: dict
     ) -> core_types.ScoredOutput:
         """Process a single prompt without sending response_format parameter."""
+        # The one seam where the real, fully-rendered chunk prompt exists: the
+        # chunk size is only part of it (instructions and few-shot examples ride
+        # along), so max_char_buffer alone cannot tell us whether this fits.
+        assert_prompt_fits(self.context_limit, prompt, "extraction")
         try:
             normalized_config = self._normalize_reasoning_params(config)
 
@@ -200,6 +264,7 @@ class LMStudioClient(BaseLLMClient):
                 api_key=self.api_key,
                 base_url=self.base_url,
                 timeout=self.timeout,
+                context_limit=context_limit(self.base_url, self.model_id),
             )
 
             # Prepare langextract kwargs
@@ -324,6 +389,12 @@ Input Text:
 
 IMPORTANT: Respond with ONLY a valid JSON array. No markdown code blocks, no explanation, just the JSON array starting with [ and ending with ].
 """
+
+            # Consolidation's prompt scales with the ENTITY COUNT, not with the
+            # document, so it is the one that outgrows a fixed window first.
+            assert_prompt_fits(
+                context_limit(self.base_url, self.model_id), full_prompt, "augmentation"
+            )
 
             # Build request payload - don't use response_format as it's not universally supported
             payload = {
