@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 import langextract as lx
 
 from ..base import BaseLLMClient, LLMClientError
+from ..json_repair import _repair_json_text
 from ..defaults import load_provider_defaults
 from ..factory import client
 
@@ -176,6 +177,7 @@ class GeminiClient(BaseLLMClient):
         """
         import google.generativeai as genai
         import json
+        import re
 
         try:
             # Configure genai with the API key
@@ -212,8 +214,15 @@ Input Text:
             if not response.text:
                 return []
 
+            # Gemini wraps JSON in markdown fences unless asked not to, and a
+            # response cut off at max_output_tokens ends mid-object. Neither is
+            # a reason to lose the whole augmentation.
+            text = response.text.strip()
+            fenced = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
+            if fenced:
+                text = fenced.group(1).strip()
             try:
-                data = json.loads(response.text)
+                data = json.loads(_repair_json_text(text))
                 if isinstance(data, list):
                     return data
                 elif isinstance(data, dict):

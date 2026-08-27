@@ -11,6 +11,7 @@ from langextract.core import types as core_types
 from langextract.core import exceptions
 
 from ..base import BaseLLMClient, LLMClientError
+from ..json_repair import _repair_json_text
 from ..defaults import load_provider_defaults
 from ..factory import client
 
@@ -440,9 +441,11 @@ IMPORTANT: Respond with ONLY a valid JSON array. No markdown code blocks, no exp
             if json_match:
                 response_text = json_match.group(1)
 
-            # Parse the JSON response
+            # Parse the JSON response. Repair first: local models emit trailing
+            # commas, control characters and responses cut off mid-object, and
+            # raising on the first bad character costs the whole consolidation.
             try:
-                data = json.loads(response_text)
+                data = json.loads(_repair_json_text(response_text))
                 if isinstance(data, list):
                     items = data
                 elif isinstance(data, dict):
