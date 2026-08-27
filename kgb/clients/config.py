@@ -46,5 +46,10 @@ class ClientConfig:
     options: dict | None = None     # extra Ollama options: num_ctx, top_p, num_predict, ...
     reset_every: int | None = None  # unload the model every N extractions (low-parallelism wedge guard)
 
+    # LM Studio's equivalent of `think`: "none" disables the reasoning trace.
+    # Measured on qwen3.8-27b, one trivial prompt: 100 completion tokens with
+    # reasoning on, 15 with it off. Extraction pays that on every chunk.
+    reasoning_effort: str | None = "none"
+
 
 __all__ = ["ClientConfig", "ClientType"]

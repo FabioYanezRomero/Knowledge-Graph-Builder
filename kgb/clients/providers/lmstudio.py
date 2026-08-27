@@ -22,6 +22,21 @@ if TYPE_CHECKING:
 _CTX_HEADROOM = 0.85  # leave ~15% of the window for the answer
 
 
+def _rejects_parameter(exc: Exception) -> bool:
+    """Did the server refuse the request because of an unknown parameter?
+
+    Narrow on purpose: a 400 about an unsupported field is worth retrying without
+    it, but a 400 about anything else — or a timeout, or a connection error — is
+    a real failure and must not be swallowed by a retry that looks like success.
+    """
+    if getattr(exc, "status_code", None) not in (400, 422):
+        return False
+    msg = str(exc).lower()
+    return any(s in msg for s in
+               ("reasoning_effort", "unknown parameter", "unrecognized",
+                "unsupported", "extra fields", "not permitted"))
+
+
 def context_limit(base_url: str, model_id: str) -> int | None:
     """Tokens LM Studio will actually accept, or None if we cannot find out.
 
@@ -106,6 +121,7 @@ class LMStudioLanguageModel(OpenAILanguageModel):
         max_workers: int = 5,
         timeout: int = 120,
         context_limit: int | None = None,
+        reasoning_effort: str | None = "none",
         **kwargs,
     ) -> None:
         """Initialize LM Studio language model with JSON format type."""
@@ -124,11 +140,42 @@ class LMStudioLanguageModel(OpenAILanguageModel):
         )
         self.timeout = timeout
         self.context_limit = context_limit
+        # langextract's OpenAI provider builds its client with no timeout, so
+        # ours was stored and silently ignored: every extraction ran on the SDK
+        # default of 600s regardless of what the config asked for. A big local
+        # model on one chunk can exceed that, and it surfaces as "Request timed
+        # out" rather than as the setting not being honoured.
+        self._client = self._client.with_options(timeout=timeout)
+        self.reasoning_effort = reasoning_effort
 
     @property
     def requires_fence_output(self) -> bool:
         """LM Studio doesn't use structured output, so we expect fenced JSON."""
         return True
+
+    def _create(self, api_params: dict, reasoning_effort: str | None):
+        """Send the request, dropping ``reasoning_effort`` if the server rejects it.
+
+        This is the LM Studio counterpart of the ollama provider's ``think:false``:
+        a reasoning model spends most of its output budget on a trace nobody reads,
+        and extraction pays that on every chunk. But not every runtime accepts the
+        parameter, and a setting that makes extraction impossible on some models is
+        worse than a slow one. So try it, and fall back once — permanently for this
+        model, so the cost is one failed request, not one per chunk.
+        """
+        if not reasoning_effort:
+            return self._client.chat.completions.create(**api_params)
+        try:
+            return self._client.chat.completions.create(
+                **api_params, reasoning_effort=reasoning_effort
+            )
+        except Exception as e:
+            if not _rejects_parameter(e):
+                raise
+            print(f"  [LM Studio] server rejected reasoning_effort={reasoning_effort!r}; "
+                  f"continuing without it (expect slower, longer generations)")
+            self.reasoning_effort = None
+            return self._client.chat.completions.create(**api_params)
 
     def _process_single_prompt(
         self, prompt: str, config: dict
@@ -181,7 +228,12 @@ class LMStudioLanguageModel(OpenAILanguageModel):
                 if (v := normalized_config.get(key)) is not None:
                     api_params[key] = v
 
-            response = self._client.chat.completions.create(**api_params)
+            # Deliberately NOT via _normalize_reasoning_params, which rewrites a
+            # flat reasoning_effort into the nested {"reasoning": {"effort": ..}}
+            # of the Responses API. Measured against LM Studio on qwen3.8-27b:
+            # the nested form is ignored (57 reasoning tokens), the flat one
+            # works (0). Normalising here would silently undo the setting.
+            response = self._create(api_params, self.reasoning_effort)
             output_text = response.choices[0].message.content
 
             # Sanitize control characters that break JSON parsing
@@ -214,7 +266,8 @@ class LMStudioClient(BaseLLMClient):
         batch_length: int | None = None,
         max_char_buffer: int = 8000,
         show_progress: bool = True,
-        timeout: int = 120
+        timeout: int = 120,
+        reasoning_effort: str | None = "none",
     ) -> None:
         """Initialize LM Studio client.
 
@@ -237,6 +290,7 @@ class LMStudioClient(BaseLLMClient):
         self.max_char_buffer = max_char_buffer
         self.show_progress = show_progress
         self.timeout = timeout
+        self.reasoning_effort = reasoning_effort
 
     def extract(
         self,
@@ -273,6 +327,7 @@ class LMStudioClient(BaseLLMClient):
                 base_url=self.base_url,
                 timeout=self.timeout,
                 context_limit=context_limit(self.base_url, self.model_id),
+                reasoning_effort=self.reasoning_effort,
             )
 
             # Prepare langextract kwargs
@@ -416,6 +471,11 @@ IMPORTANT: Respond with ONLY a valid JSON array. No markdown code blocks, no exp
             }
             if max_tokens:
                 payload["max_tokens"] = max_tokens
+            if self.reasoning_effort:
+                # Same reason as extraction, and it matters more here: a
+                # consolidation prompt is one big call, so a reasoning trace eats
+                # the answer's room in the window rather than just time.
+                payload["reasoning_effort"] = self.reasoning_effort
 
             # Call LM Studio's OpenAI-compatible API
             response = requests.post(
@@ -495,6 +555,7 @@ IMPORTANT: Respond with ONLY a valid JSON array. No markdown code blocks, no exp
             max_char_buffer=config.max_char_buffer,
             show_progress=config.show_progress,
             timeout=config.timeout,
+            reasoning_effort=config.reasoning_effort,
         )
 
 

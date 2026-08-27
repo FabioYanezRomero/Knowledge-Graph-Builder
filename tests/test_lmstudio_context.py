@@ -145,3 +145,14 @@ def test_augment_path_is_actually_guarded(monkeypatch):
         client_type="lmstudio", model_id="qwen", base_url=BASE, show_progress=False))
     with pytest.raises(LLMClientError, match="truncate it silently"):
         client.augment(text="x" * 60_000, prompt_description="p", format_type=Item)
+
+
+def test_configured_timeout_reaches_the_http_client():
+    # langextract's OpenAI provider builds its client with no timeout, so ours
+    # used to be stored and ignored -- every extraction ran on the SDK default of
+    # 600s and a slow local model surfaced it as "Request timed out".
+    from kgb.clients.providers.lmstudio import LMStudioLanguageModel
+
+    model = LMStudioLanguageModel(model_id="qwen", api_key="k", base_url=BASE,
+                                  timeout=900)
+    assert model._client.timeout == 900
