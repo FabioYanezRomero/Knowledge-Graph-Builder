@@ -38,14 +38,13 @@ def _rejects_parameter(exc: Exception) -> bool:
 
 
 def context_limit(base_url: str, model_id: str) -> int | None:
-    """Tokens LM Studio will actually accept, or None if we cannot find out.
+    """The context window LM Studio reports for the model in memory.
 
     Unlike Ollama, LM Studio takes no per-request context size: the window is
-    fixed when the model is loaded, and an over-long prompt is truncated by the
-    server according to its overflow policy — quietly, and the reply still looks
-    well-formed. So we cannot grow the window the way the ollama provider does;
-    the only defence is to read the window and refuse to send something that
-    won't fit.
+    chosen when the model is loaded, so we cannot size it to the prompt the way
+    the ollama provider does. All we can do is read it and say when a prompt is
+    bigger — see ``warn_if_prompt_exceeds_window`` for why that is a warning and
+    not a refusal.
 
     Read via LM Studio's native REST API (``/api/v0/models``), which reports
     ``loaded_context_length`` for the model currently in memory; the
@@ -70,32 +69,36 @@ def context_limit(base_url: str, model_id: str) -> int | None:
         return None
     # ONLY the loaded window, never max_context_length. Measured on a JIT-loaded
     # qwen3.8-27b: loaded_context_length 4,096 against max_context_length
-    # 262,144 -- a 64x gap. Falling back to the maximum would wave through every
-    # prompt the server then truncates, which is the exact failure this guards.
-    # A model that is not loaded yet has no window to report; returning None
-    # leaves the first request unguarded and the rest checked, because LM Studio
-    # loads on that first request and reports the real window from then on.
+    # 262,144 -- a 64x gap, so the maximum says nothing about the window in use.
+    # A model that is not loaded yet has no window to report at all.
     return match.get("loaded_context_length")
 
 
-def assert_prompt_fits(limit: int | None, prompt: str, what: str) -> None:
-    """Fail loudly rather than let LM Studio silently drop half the prompt.
+def warn_if_prompt_exceeds_window(limit: int | None, prompt: str, what: str) -> None:
+    """Say when a prompt is larger than the window LM Studio reports, and stop there.
 
-    This is a configuration problem, not a data problem: if the window is too
-    small it is too small for every chunk, so there is nothing to salvage by
-    continuing. Truncated-but-plausible output is the failure mode we most want
-    to avoid — it is indistinguishable from a model that just answered badly.
+    This deliberately warns instead of refusing. The first version raised, on the
+    assumption that LM Studio enforces ``loaded_context_length`` and truncates
+    past it. Measured against LM Studio 0.3 on the MLX runtime, that assumption is
+    wrong: an 8,340-token prompt sent against a reported window of 4,096 was
+    answered correctly, including a fact planted in its final line. The runtime
+    grew the window rather than dropping the front of the prompt, so refusing
+    would have blocked work that demonstrably succeeds.
+
+    The number is still worth surfacing. LM Studio's context-overflow policy is
+    configurable and other runtimes do truncate, so a prompt over the reported
+    window is a real thing to know about — just not something we can call a
+    failure on the evidence we have.
     """
     if not limit:
         return
     approx_tokens = len(prompt) / 3.5
     if approx_tokens > limit * _CTX_HEADROOM:
-        raise LLMClientError(
-            f"LM Studio {what} prompt is ~{int(approx_tokens):,} tokens but the loaded "
-            f"model's context is {limit:,}. LM Studio would truncate it silently and "
-            f"return a plausible-looking partial answer. Raise the context length when "
-            f"loading the model, or send less at once (smaller --max-char-buffer for "
-            f"extraction, fewer entities per consolidation)."
+        print(
+            f"  [LM Studio] {what} prompt is ~{int(approx_tokens):,} tokens against a "
+            f"reported context of {limit:,}. Whether that truncates depends on the "
+            f"runtime and the context-overflow policy; if results look thin, raise the "
+            f"context length when loading the model or send less at once."
         )
 
 
@@ -184,7 +187,7 @@ class LMStudioLanguageModel(OpenAILanguageModel):
         # The one seam where the real, fully-rendered chunk prompt exists: the
         # chunk size is only part of it (instructions and few-shot examples ride
         # along), so max_char_buffer alone cannot tell us whether this fits.
-        assert_prompt_fits(self.context_limit, prompt, "extraction")
+        warn_if_prompt_exceeds_window(self.context_limit, prompt, "extraction")
         try:
             normalized_config = self._normalize_reasoning_params(config)
 
@@ -457,7 +460,7 @@ IMPORTANT: Respond with ONLY a valid JSON array. No markdown code blocks, no exp
 
             # Consolidation's prompt scales with the ENTITY COUNT, not with the
             # document, so it is the one that outgrows a fixed window first.
-            assert_prompt_fits(
+            warn_if_prompt_exceeds_window(
                 context_limit(self.base_url, self.model_id), full_prompt, "augmentation"
             )
 

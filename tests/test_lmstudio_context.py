@@ -1,18 +1,28 @@
-"""LM Studio cannot grow its window, so it has to refuse what will not fit.
+"""LM Studio cannot size its window per request, so all we can do is report it.
 
-Ollama takes a per-request num_ctx, so the ollama provider sizes the window to
-the prompt. LM Studio fixes the window when the model is loaded and truncates an
-over-long prompt server-side, returning a well-formed partial answer that is
-indistinguishable from a model that simply answered badly. The only defence left
-is to read the window and refuse.
+Ollama takes a per-request num_ctx and the ollama provider grows it to fit the
+prompt. LM Studio picks the window when the model is loaded, so there is nothing
+to grow -- we read what it reports and say when a prompt is bigger.
+
+We say it rather than refuse it. The first version raised, assuming LM Studio
+enforces the reported window. Measured against LM Studio on the MLX runtime it
+does not: an 8,340-token prompt against a reported 4,096 window came back
+correct, including a fact planted in its last line. Refusing would have blocked
+work that demonstrably succeeds.
 """
-import pytest
 import requests
 
-from kgb.clients import LLMClientError
-from kgb.clients.providers.lmstudio import assert_prompt_fits, context_limit
+from kgb.clients.providers.lmstudio import context_limit, warn_if_prompt_exceeds_window
 
 BASE = "http://localhost:1234/v1"
+
+
+def _completion(content):
+    """The shape LMStudioLanguageModel reads out of the OpenAI SDK response."""
+    import types
+    return types.SimpleNamespace(
+        choices=[types.SimpleNamespace(
+            message=types.SimpleNamespace(content=content))])
 
 
 class FakeResponse:
@@ -87,64 +97,70 @@ def test_unreachable_server_disables_the_guard(monkeypatch):
     assert context_limit(BASE, "qwen") is None
 
 
-def test_fits_comfortably_is_silent():
-    assert_prompt_fits(32768, "x" * 1000, "extraction")
+def test_fits_comfortably_is_silent(capsys):
+    warn_if_prompt_exceeds_window(32768, "x" * 1000, "extraction")
+    assert capsys.readouterr().out == ""
 
 
-def test_unknown_limit_is_silent():
-    assert_prompt_fits(None, "x" * 10_000_000, "extraction")
+def test_unknown_limit_is_silent(capsys):
+    warn_if_prompt_exceeds_window(None, "x" * 10_000_000, "extraction")
+    assert capsys.readouterr().out == ""
 
 
-def test_overflow_refuses_and_says_how_to_fix_it():
-    with pytest.raises(LLMClientError) as e:
-        assert_prompt_fits(8192, "x" * 200_000, "augmentation")
-    msg = str(e.value)
-    assert "truncate it silently" in msg
-    assert "8,192" in msg                    # the window it would have hit
-    assert "Raise the context length" in msg  # and what to do about it
+def test_overflow_reports_without_blocking(capsys):
+    # Warn, do not raise: an over-window prompt was measured to succeed, so
+    # refusing would block real work on a number we cannot enforce.
+    warn_if_prompt_exceeds_window(8192, "x" * 200_000, "augmentation")
+    out = capsys.readouterr().out
+    assert "8,192" in out                  # the window it went over
+    assert "if results look thin" in out   # and what to do if it mattered
 
 
-def test_headroom_is_reserved_for_the_answer():
-    # A prompt that technically fits but leaves no room to reply is still broken.
-    just_under_the_window = "x" * int(8192 * 3.5 * 0.95)
-    with pytest.raises(LLMClientError):
-        assert_prompt_fits(8192, just_under_the_window, "extraction")
+def test_headroom_counts_the_answer_too(capsys):
+    # A prompt that fits with nothing left to reply into is worth mentioning.
+    warn_if_prompt_exceeds_window(8192, "x" * int(8192 * 3.5 * 0.95), "extraction")
+    assert "[LM Studio]" in capsys.readouterr().out
 
 
-def test_extraction_path_is_actually_guarded(monkeypatch):
-    # The guard is only worth anything if it sits where the fully-rendered chunk
-    # prompt exists. Measured live: a 16,000-char chunk renders to ~5,510 tokens,
-    # so max_char_buffer alone cannot tell you whether it fits -- the
-    # instructions and few-shot examples ride along.
+def test_extraction_path_reports_and_carries_on(monkeypatch, capsys):
+    # The report is only worth anything where the fully-rendered chunk prompt
+    # exists. Measured live: a 16,000-char chunk renders to ~5,510 tokens, so
+    # max_char_buffer alone cannot tell you the size -- the instructions and
+    # few-shot examples ride along.
     from kgb.clients.providers.lmstudio import LMStudioLanguageModel
 
     model = LMStudioLanguageModel(
-        model_id="qwen", api_key="k", base_url=BASE, context_limit=4096,
-    )
-    with pytest.raises(LLMClientError):
-        model._process_single_prompt("x" * 60_000, {})
+        model_id="qwen", api_key="k", base_url=BASE, context_limit=4096)
+    monkeypatch.setattr(model, "_create", lambda *a, **k: _completion("[]"))
+    model._process_single_prompt("x" * 60_000, {})
+    assert "[LM Studio] extraction prompt" in capsys.readouterr().out
 
 
-def test_augment_path_is_actually_guarded(monkeypatch):
-    # Consolidation's prompt scales with the entity count, so it outgrows a fixed
-    # window first -- and it never touches the extraction seam.
+def test_augment_path_reports_and_carries_on(monkeypatch, capsys):
+    # Consolidation's prompt scales with the entity count, so it goes over first
+    # -- and it never touches the extraction seam.
     from kgb.clients import ClientConfig, ClientFactory
 
     _serving(monkeypatch, [{"id": "qwen", "state": "loaded",
                             "loaded_context_length": 4096}])
 
-    def no_inference(*a, **k):
-        raise AssertionError("refusal must happen before anything is sent")
+    class Resp:
+        status_code = 200
 
-    monkeypatch.setattr(requests, "post", no_inference)
+        def raise_for_status(self): pass
+
+        def json(self): return {"choices": [{"message": {"content": "[]"}}]}
+
+    monkeypatch.setattr(requests, "post", lambda *a, **k: Resp())
 
     class Item(__import__("pydantic").BaseModel):
         head: str
 
     client = ClientFactory.create(ClientConfig(
         client_type="lmstudio", model_id="qwen", base_url=BASE, show_progress=False))
-    with pytest.raises(LLMClientError, match="truncate it silently"):
-        client.augment(text="x" * 60_000, prompt_description="p", format_type=Item)
+    assert client.augment(text="x" * 60_000, prompt_description="p",
+                          format_type=Item) == []
+    assert "[LM Studio] augmentation prompt" in capsys.readouterr().out
 
 
 def test_configured_timeout_reaches_the_http_client():
