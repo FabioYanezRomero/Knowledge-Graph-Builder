@@ -53,7 +53,14 @@ def context_limit(base_url: str, model_id: str) -> int | None:
         match = loaded[0] if len(loaded) == 1 else None
     if match is None:
         return None
-    return match.get("loaded_context_length") or match.get("max_context_length")
+    # ONLY the loaded window, never max_context_length. Measured on a JIT-loaded
+    # qwen3.8-27b: loaded_context_length 4,096 against max_context_length
+    # 262,144 -- a 64x gap. Falling back to the maximum would wave through every
+    # prompt the server then truncates, which is the exact failure this guards.
+    # A model that is not loaded yet has no window to report; returning None
+    # leaves the first request unguarded and the rest checked, because LM Studio
+    # loads on that first request and reports the real window from then on.
+    return match.get("loaded_context_length")
 
 
 def assert_prompt_fits(limit: int | None, prompt: str, what: str) -> None:
@@ -344,8 +351,10 @@ class LMStudioClient(BaseLLMClient):
             return triples
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()  # Print to stderr
+            # No traceback dump: the common failure here is now a context-window
+            # refusal, which is an actionable config message, and burying it under
+            # a langextract stack trace helps nobody. `raise ... from e` keeps the
+            # chain for anyone who wants it.
             raise LLMClientError(f"LM Studio extraction failed: {e}") from e
 
     def augment(

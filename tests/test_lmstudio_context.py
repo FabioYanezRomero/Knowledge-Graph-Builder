@@ -35,15 +35,26 @@ def _serving(monkeypatch, entries):
 
 
 def test_reads_the_loaded_window_not_the_maximum(monkeypatch):
-    # A model can be loaded with a window far below what it supports — the
-    # loaded one is what truncates, so it is the one that matters.
+    # Measured on a JIT-loaded qwen3.8-27b: LM Studio gave it a 4,096 window on a
+    # model that supports 262,144. Reading the maximum would wave through prompts
+    # 64x too big for the window actually in use.
     seen = _serving(monkeypatch, [
-        {"id": "qwen", "state": "loaded", "max_context_length": 131072,
-         "loaded_context_length": 8192},
+        {"id": "qwen", "state": "loaded", "max_context_length": 262144,
+         "loaded_context_length": 4096},
     ])
-    assert context_limit(BASE, "qwen") == 8192
+    assert context_limit(BASE, "qwen") == 4096
     # /v1/models does not expose context length; the native API does.
     assert seen["url"] == "http://localhost:1234/api/v0/models"
+
+
+def test_a_model_not_yet_loaded_reports_no_window(monkeypatch):
+    # Its max_context_length is a ceiling, not the window LM Studio will pick
+    # when it loads on the first request. Better unguarded than confidently wrong:
+    # the load happens on that request, and every later one is checked for real.
+    _serving(monkeypatch, [
+        {"id": "qwen", "state": "not-loaded", "max_context_length": 262144},
+    ])
+    assert context_limit(BASE, "qwen") is None
 
 
 def test_falls_back_to_the_only_loaded_model(monkeypatch):
@@ -98,3 +109,39 @@ def test_headroom_is_reserved_for_the_answer():
     just_under_the_window = "x" * int(8192 * 3.5 * 0.95)
     with pytest.raises(LLMClientError):
         assert_prompt_fits(8192, just_under_the_window, "extraction")
+
+
+def test_extraction_path_is_actually_guarded(monkeypatch):
+    # The guard is only worth anything if it sits where the fully-rendered chunk
+    # prompt exists. Measured live: a 16,000-char chunk renders to ~5,510 tokens,
+    # so max_char_buffer alone cannot tell you whether it fits -- the
+    # instructions and few-shot examples ride along.
+    from kgb.clients.providers.lmstudio import LMStudioLanguageModel
+
+    model = LMStudioLanguageModel(
+        model_id="qwen", api_key="k", base_url=BASE, context_limit=4096,
+    )
+    with pytest.raises(LLMClientError):
+        model._process_single_prompt("x" * 60_000, {})
+
+
+def test_augment_path_is_actually_guarded(monkeypatch):
+    # Consolidation's prompt scales with the entity count, so it outgrows a fixed
+    # window first -- and it never touches the extraction seam.
+    from kgb.clients import ClientConfig, ClientFactory
+
+    _serving(monkeypatch, [{"id": "qwen", "state": "loaded",
+                            "loaded_context_length": 4096}])
+
+    def no_inference(*a, **k):
+        raise AssertionError("refusal must happen before anything is sent")
+
+    monkeypatch.setattr(requests, "post", no_inference)
+
+    class Item(__import__("pydantic").BaseModel):
+        head: str
+
+    client = ClientFactory.create(ClientConfig(
+        client_type="lmstudio", model_id="qwen", base_url=BASE, show_progress=False))
+    with pytest.raises(LLMClientError, match="truncate it silently"):
+        client.augment(text="x" * 60_000, prompt_description="p", format_type=Item)
